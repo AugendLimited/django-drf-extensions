@@ -65,25 +65,7 @@ class OperationsMixin:
     - DELETE /api/model/bulk/                         # Async delete
     """
     
-    # Enable PATCH and PUT on list endpoint
-    http_method_names = ['get', 'post', 'patch', 'put', 'delete', 'head', 'options', 'trace']
 
-    def dispatch(self, request, *args, **kwargs):
-        """Override dispatch to handle PATCH/PUT on list endpoint for upsert."""
-        # If it's a PATCH or PUT request on list endpoint (no pk in kwargs)
-        if request.method in ['PATCH', 'PUT'] and 'pk' not in kwargs:
-            # Check if this has unique_fields parameter (indicates upsert intent)
-            # Use request.GET since query_params isn't available yet (pre-DRF processing)
-            unique_fields_param = request.GET.get("unique_fields")
-            if unique_fields_param:
-                # Route to our upsert handler
-                if request.method == 'PATCH':
-                    return self.patch(request, *args, **kwargs)
-                elif request.method == 'PUT':
-                    return self.put(request, *args, **kwargs)
-        
-        # Default DRF routing
-        return super().dispatch(request, *args, **kwargs)
 
     def get_serializer(self, *args, **kwargs):
         """Handle array data for serializers."""
@@ -128,8 +110,8 @@ class OperationsMixin:
         """
         Enhanced update endpoint that supports sync upsert via query params.
         
-        - PATCH /api/model/{id}/                              # Standard single update
-        - PATCH /api/model/?unique_fields=field1,field2      # Sync upsert (array data)
+        - PUT /api/model/{id}/                               # Standard single update
+        - PUT /api/model/?unique_fields=field1,field2       # Sync upsert (array data)
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
@@ -142,8 +124,8 @@ class OperationsMixin:
         """
         Enhanced partial update endpoint that supports sync upsert via query params.
         
-        - PATCH /api/model/{id}/                              # Standard single partial update
-        - PATCH /api/model/?unique_fields=field1,field2      # Sync upsert (array data)
+        - PATCH /api/model/{id}/                             # Standard single partial update
+        - PATCH /api/model/?unique_fields=field1,field2     # Sync upsert (array data)
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
@@ -156,13 +138,14 @@ class OperationsMixin:
         """
         Handle PATCH requests on list endpoint for sync upsert.
         
-        - PATCH /api/model/?unique_fields=field1,field2      # Sync upsert (array data)
+        DRF doesn't handle PATCH on list endpoints by default, so we add this method
+        to support: PATCH /api/model/?unique_fields=field1,field2
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
         
-        # If no unique_fields or not array data, this is an invalid PATCH on list endpoint
+        # If no unique_fields or not array data, this is invalid
         return Response(
             {"error": "PATCH on list endpoint requires 'unique_fields' parameter and array data"},
             status=status.HTTP_400_BAD_REQUEST,
@@ -172,17 +155,20 @@ class OperationsMixin:
         """
         Handle PUT requests on list endpoint for sync upsert.
         
-        - PUT /api/model/?unique_fields=field1,field2      # Sync upsert (array data)
+        DRF doesn't handle PUT on list endpoints by default, so we add this method
+        to support: PUT /api/model/?unique_fields=field1,field2
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
         
-        # If no unique_fields or not array data, this is an invalid PUT on list endpoint
+        # If no unique_fields or not array data, this is invalid
         return Response(
             {"error": "PUT on list endpoint requires 'unique_fields' parameter and array data"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+
 
     # =============================================================================
     # Sync Operation Implementations
