@@ -64,6 +64,25 @@ class OperationsMixin:
     - PUT    /api/model/bulk/                         # Async replace/upsert
     - DELETE /api/model/bulk/                         # Async delete
     """
+    
+    # Enable PATCH and PUT on list endpoint
+    http_method_names = ['get', 'post', 'patch', 'put', 'delete', 'head', 'options', 'trace']
+
+    def dispatch(self, request, *args, **kwargs):
+        """Override dispatch to handle PATCH/PUT on list endpoint for upsert."""
+        # If it's a PATCH or PUT request on list endpoint (no pk in kwargs)
+        if request.method in ['PATCH', 'PUT'] and 'pk' not in kwargs:
+            # Check if this is an upsert request
+            unique_fields_param = request.query_params.get("unique_fields")
+            if unique_fields_param and isinstance(request.data, list):
+                # Route to our upsert handler
+                if request.method == 'PATCH':
+                    return self.patch(request, *args, **kwargs)
+                elif request.method == 'PUT':
+                    return self.put(request, *args, **kwargs)
+        
+        # Default DRF routing
+        return super().dispatch(request, *args, **kwargs)
 
     def get_serializer(self, *args, **kwargs):
         """Handle array data for serializers."""
@@ -119,8 +138,50 @@ class OperationsMixin:
         return super().update(request, *args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
-        """Standard partial update - no array support needed here."""
+        """
+        Enhanced partial update endpoint that supports sync upsert via query params.
+        
+        - PATCH /api/model/{id}/                              # Standard single partial update
+        - PATCH /api/model/?unique_fields=field1,field2      # Sync upsert (array data)
+        """
+        unique_fields_param = request.query_params.get("unique_fields")
+        if unique_fields_param and isinstance(request.data, list):
+            return self._sync_upsert(request, unique_fields_param)
+        
+        # Standard single partial update behavior  
         return super().partial_update(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        """
+        Handle PATCH requests on list endpoint for sync upsert.
+        
+        - PATCH /api/model/?unique_fields=field1,field2      # Sync upsert (array data)
+        """
+        unique_fields_param = request.query_params.get("unique_fields")
+        if unique_fields_param and isinstance(request.data, list):
+            return self._sync_upsert(request, unique_fields_param)
+        
+        # If no unique_fields or not array data, this is an invalid PATCH on list endpoint
+        return Response(
+            {"error": "PATCH on list endpoint requires 'unique_fields' parameter and array data"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def put(self, request, *args, **kwargs):
+        """
+        Handle PUT requests on list endpoint for sync upsert.
+        
+        - PUT /api/model/?unique_fields=field1,field2      # Sync upsert (array data)
+        """
+        unique_fields_param = request.query_params.get("unique_fields")
+        if unique_fields_param and isinstance(request.data, list):
+            return self._sync_upsert(request, unique_fields_param)
+        
+        # If no unique_fields or not array data, this is an invalid PUT on list endpoint
+        return Response(
+            {"error": "PUT on list endpoint requires 'unique_fields' parameter and array data"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     # =============================================================================
     # Sync Operation Implementations
