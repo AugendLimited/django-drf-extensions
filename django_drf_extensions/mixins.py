@@ -36,6 +36,7 @@ except ImportError:
     
     class OpenApiTypes:
         STR = "string"
+        INT = "integer"
 
 from django_drf_extensions.processing import (
     async_create_task,
@@ -134,6 +135,57 @@ class OperationsMixin:
         # Standard single partial update behavior  
         return super().partial_update(request, *args, **kwargs)
 
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="unique_fields",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Comma-separated unique field names for upsert mode",
+                examples=[OpenApiExample("Fields", value="account_number,email")]
+            ),
+            OpenApiParameter(
+                name="update_fields",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Comma-separated field names to update (optional, auto-inferred if not provided)",
+                examples=[OpenApiExample("Fields", value="business,status")]
+            ),
+            OpenApiParameter(
+                name="max_items",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Maximum items for sync processing (default: 50)",
+                examples=[OpenApiExample("Max Items", value=50)]
+            )
+        ],
+        request={
+            "application/json": {
+                "type": "array",
+                "description": "Array of objects to upsert",
+            }
+        },
+        responses={
+            200: {
+                "description": "Upsert completed successfully - returns updated/created objects",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "description": "Single object response"
+                    },
+                    {
+                        "type": "array",
+                        "description": "Multiple objects response"
+                    }
+                ]
+            },
+            400: {
+                "description": "Bad request - missing parameters or invalid data"
+            }
+        },
+        description="Upsert multiple instances synchronously. Creates new records or updates existing ones based on unique fields.",
+        summary="Sync upsert (PATCH)"
+    )
     def patch(self, request, *args, **kwargs):
         """
         Handle PATCH requests on list endpoint for sync upsert.
@@ -151,6 +203,57 @@ class OperationsMixin:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="unique_fields",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Comma-separated unique field names for upsert mode",
+                examples=[OpenApiExample("Fields", value="account_number,email")]
+            ),
+            OpenApiParameter(
+                name="update_fields",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Comma-separated field names to update (optional, auto-inferred if not provided)",
+                examples=[OpenApiExample("Fields", value="business,status")]
+            ),
+            OpenApiParameter(
+                name="max_items",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Maximum items for sync processing (default: 50)",
+                examples=[OpenApiExample("Max Items", value=50)]
+            )
+        ],
+        request={
+            "application/json": {
+                "type": "array",
+                "description": "Array of objects to upsert",
+            }
+        },
+        responses={
+            200: {
+                "description": "Upsert completed successfully - returns updated/created objects",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "description": "Single object response"
+                    },
+                    {
+                        "type": "array",
+                        "description": "Multiple objects response"
+                    }
+                ]
+            },
+            400: {
+                "description": "Bad request - missing parameters or invalid data"
+            }
+        },
+        description="Upsert multiple instances synchronously. Creates new records or updates existing ones based on unique fields.",
+        summary="Sync upsert (PUT)"
+    )
     def put(self, request, *args, **kwargs):
         """
         Handle PUT requests on list endpoint for sync upsert.
@@ -264,6 +367,7 @@ class OperationsMixin:
         created_ids = []
         updated_ids = []
         errors = []
+        instances = []
         
         # Process and validate all items
         for index, item_data in enumerate(data_list):
@@ -318,6 +422,9 @@ class OperationsMixin:
                         created_ids.append(instance.id)
                     else:
                         updated_ids.append(instance.id)
+                    
+                    # Add instance to results
+                    instances.append(instance)
                 
                 else:
                     errors.append({
@@ -333,19 +440,15 @@ class OperationsMixin:
                     "data": item_data
                 })
         
-        return {
-            "message": "Upsert completed successfully",
-            "total_items": len(data_list),
-            "created_count": len(created_ids),
-            "updated_count": len(updated_ids),
-            "error_count": len(errors),
-            "created_ids": created_ids,
-            "updated_ids": updated_ids,
-            "errors": errors,
-            "unique_fields": unique_fields,
-            "update_fields": update_fields,
-            "is_sync": True
-        }
+        # Return serialized objects like standard DRF responses
+        if len(instances) == 1:
+            # Single object response (like PATCH /api/model/{id}/)
+            serializer = serializer_class(instances[0])
+            return serializer.data
+        else:
+            # Multiple objects response (like PATCH with array)
+            serializer = serializer_class(instances, many=True)
+            return serializer.data
 
     def _infer_update_fields(self, data_list, unique_fields):
         """Auto-infer update fields from data payload."""
