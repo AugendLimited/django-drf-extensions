@@ -72,9 +72,10 @@ class OperationsMixin:
         """Override dispatch to handle PATCH/PUT on list endpoint for upsert."""
         # If it's a PATCH or PUT request on list endpoint (no pk in kwargs)
         if request.method in ['PATCH', 'PUT'] and 'pk' not in kwargs:
-            # Check if this is an upsert request
-            unique_fields_param = request.query_params.get("unique_fields")
-            if unique_fields_param and isinstance(request.data, list):
+            # Check if this has unique_fields parameter (indicates upsert intent)
+            # Use request.GET since query_params isn't available yet (pre-DRF processing)
+            unique_fields_param = request.GET.get("unique_fields")
+            if unique_fields_param:
                 # Route to our upsert handler
                 if request.method == 'PATCH':
                     return self.patch(request, *args, **kwargs)
