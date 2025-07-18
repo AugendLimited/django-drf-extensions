@@ -1269,8 +1269,8 @@ class AsyncOperationsMixin:
         """
         Upsert multiple instances asynchronously.
         
-        Similar to Django's bulk_create with update_conflicts=True, this method
-        will create new records or update existing ones based on unique field constraints.
+        Intelligent upsert operation that creates new records or updates existing ones
+        based on unique field constraints.
         
         Expects a JSON object with:
         - data: Array of objects to upsert

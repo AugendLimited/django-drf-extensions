@@ -159,8 +159,8 @@ class DRFExtensionsExample:
         """
         Upsert multiple financial transactions using PATCH async endpoint.
         
-        Similar to Django's bulk_create with update_conflicts=True, this will create
-        new records or update existing ones based on unique field constraints.
+        Intelligent upsert operation that creates new records or updates existing ones
+        based on unique field constraints.
 
         Args:
             data: Single object or list of transaction data dictionaries

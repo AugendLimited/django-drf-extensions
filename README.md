@@ -1,6 +1,6 @@
 # Django DRF Extensions
 
-Enhanced operations for Django REST Framework using Celery workers and Redis for progress tracking.
+Advanced operation extensions for Django REST Framework providing both asynchronous processing via Celery/Redis and synchronous operations with intelligent routing based on dataset size.
 
 ## Installation
 
@@ -48,30 +48,31 @@ CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
 CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
 ```
 
-This implementation provides both **asynchronous operations** and **synchronous upsert operations** for your Django REST Framework API endpoints using Celery workers and Redis for progress tracking.
+This implementation extends Django REST Framework with powerful operation mixins that automatically choose between synchronous and asynchronous processing based on your data size and requirements.
 
 ## Overview
 
-The operations system consists of:
+The extension system consists of:
 
-1. **Processing Tasks** (`django_drf_extensions.processing`) - Celery tasks for handling async operations
-2. **Mixins** (`django_drf_extensions.mixins`) - DRF ViewSet mixins to add operation endpoints
-3. **Sync Upsert Mixin** (`django_drf_extensions.mixins.SyncUpsertMixin`) - DRF ViewSet mixin for synchronous upsert operations
-4. **Redis Cache** (`django_drf_extensions.cache`) - Progress tracking and result caching
-5. **Status Views** (`django_drf_extensions.views`) - API endpoints to check task status
+1. **Processing Engine** (`django_drf_extensions.processing`) - Celery tasks for scalable async operations
+2. **Operation Mixins** (`django_drf_extensions.mixins`) - DRF ViewSet mixins that add intelligent operation endpoints
+3. **Sync Operations** (`django_drf_extensions.mixins.SyncUpsertMixin`) - Immediate processing for small datasets
+4. **Progress Tracking** (`django_drf_extensions.cache`) - Redis-based progress monitoring and result caching
+5. **Status Management** (`django_drf_extensions.views`) - API endpoints for operation status and results
 
 ## Features
 
-- ✅ **Asynchronous Processing**: Long-running operations don't block the API
-- ✅ **Synchronous Upserts**: Immediate results for small datasets (≤50 items)
-- ✅ **Progress Tracking**: Real-time progress updates via Redis
-- ✅ **Error Handling**: Detailed error reporting for failed items
-- ✅ **Result Caching**: Final results cached in Redis for 24 hours
-- ✅ **Validation**: Full DRF serializer validation for all items
-- ✅ **Atomic Operations**: Database transactions ensure data consistency
-- ✅ **Unified Endpoint**: Single `/operations` endpoint supports both JSON and CSV via Content-Type detection
-- ✅ **RESTful Design**: Uses HTTP methods (GET, POST, PATCH, PUT, DELETE) for different operations
-- ✅ **Smart Routing**: Automatically chooses sync vs async based on dataset size and endpoint
+- ✅ **Intelligent Processing**: Automatically routes between sync and async based on dataset size
+- ✅ **Immediate Results**: Synchronous operations for small datasets (≤50 items) with instant feedback
+- ✅ **Scalable Processing**: Asynchronous operations for large datasets without blocking the API
+- ✅ **Real-time Monitoring**: Live progress tracking and detailed status reporting via Redis
+- ✅ **Comprehensive Error Handling**: Detailed validation and error reporting for individual items
+- ✅ **Result Persistence**: Automatic caching of results for 24 hours with fast retrieval
+- ✅ **Full Validation**: Complete DRF serializer validation ensuring data integrity
+- ✅ **Transaction Safety**: Atomic database operations with automatic rollback on failures
+- ✅ **Unified API**: Single endpoint supporting JSON and CSV via intelligent Content-Type detection
+- ✅ **RESTful Operations**: Standard HTTP methods (GET, POST, PATCH, PUT, DELETE) for different actions
+- ✅ **Format Flexibility**: Support for both structured JSON payloads and CSV file uploads
 
 ## Content-Type Detection
 
@@ -162,7 +163,7 @@ curl -X POST "http://localhost:8000/api/financial-transactions/upsert/?unique_fi
 - **Method**: PATCH or PUT
 - **Input**: Object with `data` array, `unique_fields`, and optional `update_fields`
 - **Output**: Task ID and status URL
-- **Description**: Similar to Django's `bulk_create` with `update_conflicts=True`. Integrated into existing PATCH/PUT endpoints.
+- **Description**: Intelligent upsert operation that creates new records or updates existing ones based on unique constraints. Integrated into existing PATCH/PUT endpoints.
 
 ### CSV-based Operations (Async)
 
@@ -202,7 +203,7 @@ All CSV operations use the same `/operations` endpoint with `Content-Type: multi
 - **Content-Type**: `multipart/form-data`
 - **Input**: CSV file with headers matching model fields + form fields for `unique_fields` and optional `update_fields`
 - **Output**: Task ID and status URL
-- **Description**: Similar to Django's `bulk_create` with `update_conflicts=True`. Integrated into existing PATCH/PUT endpoints.
+- **Description**: Intelligent upsert operation that creates new records or updates existing ones based on unique constraints. Integrated into existing PATCH/PUT endpoints.
 
 ### 13. Status Tracking
 - **Endpoint**: `GET /api/operations/{task_id}/status/`
@@ -238,25 +239,60 @@ All CSV operations use the same `/operations` endpoint with `Content-Type: multi
 
 ## Usage
 
-### Adding Operations to a ViewSet
+### Adding Extensions to a ViewSet
 
 ```python
+from rest_framework import viewsets
 from django_drf_extensions.mixins import AsyncOperationsMixin, SyncUpsertMixin
 
-# For async operations only
-class FinancialTransactionViewSet(AsyncOperationsMixin, viewsets.ModelViewSet):
-    queryset = FinancialTransaction.objects.all()
-    serializer_class = FinancialTransactionSerializer
+# Recommended: Full extension support
+class ProductViewSet(SyncUpsertMixin, AsyncOperationsMixin, viewsets.ModelViewSet):
+    """
+    Enhanced ViewSet with intelligent operation routing.
+    
+    Provides:
+    - Standard CRUD via ModelViewSet
+    - Sync operations via /upsert/ (≤50 items, immediate results)
+    - Async operations via /operations/ (>50 items, background processing)
+    """
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
 
-# For sync upsert operations only  
-class FinancialTransactionViewSet(SyncUpsertMixin, viewsets.ModelViewSet):
-    queryset = FinancialTransaction.objects.all()
-    serializer_class = FinancialTransactionSerializer
+# Async-only: For large dataset processing
+class DataImportViewSet(AsyncOperationsMixin, viewsets.ModelViewSet):
+    """ViewSet optimized for large dataset operations."""
+    queryset = ImportRecord.objects.all()
+    serializer_class = ImportRecordSerializer
 
-# For both sync and async operations (recommended)
-class FinancialTransactionViewSet(SyncUpsertMixin, AsyncOperationsMixin, viewsets.ModelViewSet):
-    queryset = FinancialTransaction.objects.all()
-    serializer_class = FinancialTransactionSerializer
+# Sync-only: For real-time operations
+class UserPreferenceViewSet(SyncUpsertMixin, viewsets.ModelViewSet):
+    """ViewSet optimized for immediate user interactions."""
+    queryset = UserPreference.objects.all()
+    serializer_class = UserPreferenceSerializer
+```
+
+Your ViewSet now provides these endpoints automatically:
+
+```bash
+# Standard ModelViewSet endpoints (unchanged)
+GET    /api/products/              # List
+POST   /api/products/              # Create single
+GET    /api/products/{id}/         # Retrieve single
+PATCH  /api/products/{id}/         # Update single
+DELETE /api/products/{id}/         # Delete single
+
+# Extension endpoints (new)
+GET    /api/products/operations/   # Async retrieve multiple
+POST   /api/products/operations/   # Async create multiple  
+PATCH  /api/products/operations/   # Async update multiple
+PUT    /api/products/operations/   # Async replace multiple
+DELETE /api/products/operations/   # Async delete multiple
+
+POST   /api/products/upsert/       # Sync upsert (immediate)
+PATCH  /api/products/upsert/       # Sync upsert (immediate)
+PUT    /api/products/upsert/       # Sync upsert (immediate)
+
+GET    /api/operations/{task_id}/status/  # Check async status
 ```
 
 ### OpenAPI/Swagger Documentation
@@ -503,51 +539,141 @@ pip install flower
 celery -A your_project flower
 ```
 
-## Migration from django-bulk-drf
+## Package Philosophy
 
-If you're migrating from the old `django-bulk-drf` package:
+This package provides a modern approach to scalable operations by offering:
 
-1. **Update package name**:
-```bash
-pip uninstall django-bulk-drf
-pip install django-drf-extensions
-```
+1. **Smart Operation Routing**: Automatically determines the best processing method based on your data size
+2. **Unified API Design**: Single endpoints that handle both small immediate operations and large async processing
+3. **Extensible Architecture**: Clean mixins that extend your existing ViewSets without disrupting current functionality
+4. **Production-Ready**: Built-in monitoring, error handling, and progress tracking for enterprise use
 
-2. **Update INSTALLED_APPS**:
+## Migration Guide
+
+If you're coming from `django-bulk-drf` or similar packages, here's how to update:
+
+### **Before** (django-bulk-drf)
 ```python
-INSTALLED_APPS = [
-    # ... your other apps
-    'rest_framework',
-    'django_drf_extensions',  # Changed from 'django_bulk_drf'
-]
-```
-
-3. **Update imports**:
-```python
-# Old
 from django_bulk_drf.bulk_mixins import BulkOperationsMixin
 
-# New
-from django_drf_extensions.mixins import AsyncOperationsMixin
+class ContractViewSet(BulkOperationsMixin, viewsets.ModelViewSet):
+    queryset = Contract.objects.all()
+    serializer_class = ContractSerializer
 ```
 
-4. **Update endpoint URLs**:
-```bash
-# Old
-/api/model/bulk/
+### **After** (django-drf-extensions)
 
-# New
-/api/model/operations/  # For async operations
-/api/model/upsert/      # For sync upsert
-```
-
-5. **Update settings** (optional):
+**Option 1: Full Extension Support (Recommended)**
 ```python
-# Old setting names (still supported for backward compatibility)
-BULK_DRF_CHUNK_SIZE = 100
+from django_drf_extensions.mixins import AsyncOperationsMixin, SyncUpsertMixin
 
-# New setting names (recommended)
-DRF_EXT_CHUNK_SIZE = 100
+class ContractViewSet(SyncUpsertMixin, AsyncOperationsMixin, viewsets.ModelViewSet):
+    """
+    Enhanced ViewSet with intelligent operation routing.
+    
+    Provides:
+    - Standard CRUD operations
+    - Immediate sync operations for small datasets (≤50 items)
+    - Background async operations for large datasets (>50 items)
+    """
+    queryset = Contract.objects.all()
+    serializer_class = ContractSerializer
+```
+
+**Option 2: Async-Only (Similar to old bulk behavior)**
+```python
+from django_drf_extensions.mixins import AsyncOperationsMixin
+
+class ContractViewSet(AsyncOperationsMixin, viewsets.ModelViewSet):
+    """ViewSet with async operations for large datasets."""
+    queryset = Contract.objects.all()
+    serializer_class = ContractSerializer
+```
+
+**Option 3: Sync-Only (For immediate results)**
+```python
+from django_drf_extensions.mixins import SyncUpsertMixin
+
+class ContractViewSet(SyncUpsertMixin, viewsets.ModelViewSet):
+    """ViewSet with sync operations for immediate results."""
+    queryset = Contract.objects.all()
+    serializer_class = ContractSerializer
+```
+
+### **Key Changes**
+
+| Old Package | New Package | Benefit |
+|-------------|-------------|---------|
+| `BulkOperationsMixin` | `AsyncOperationsMixin` | Same async functionality, better naming |
+| Single mixin | `SyncUpsertMixin + AsyncOperationsMixin` | Choose sync/async based on dataset size |
+| `/bulk/` endpoints | `/operations/` and `/upsert/` | RESTful design with intelligent routing |
+| Only async | Both sync and async | Immediate results for small datasets |
+
+### **Endpoint Changes**
+
+| Old Endpoints | New Endpoints | Purpose |
+|---------------|---------------|---------|
+| `POST /api/contracts/bulk/` | `POST /api/contracts/operations/` | Async create (large datasets) |
+| | `POST /api/contracts/upsert/` | Sync upsert (small datasets) |
+| `PATCH /api/contracts/bulk/` | `PATCH /api/contracts/operations/` | Async update (large datasets) |
+| | `PATCH /api/contracts/upsert/` | Sync upsert (small datasets) |
+| `DELETE /api/contracts/bulk/` | `DELETE /api/contracts/operations/` | Async delete |
+| `/status/{task_id}/` | `/api/operations/{task_id}/status/` | Task status monitoring |
+
+### **Usage Examples**
+
+**Small dataset (immediate results):**
+```bash
+# Sync upsert - immediate response
+curl -X POST "/api/contracts/upsert/?unique_fields=contract_number" \
+  -H "Content-Type: application/json" \
+  -d '[{"contract_number": "C001", "amount": 1000}]'
+```
+
+**Large dataset (background processing):**
+```bash
+# Async operations - returns task ID
+curl -X POST "/api/contracts/operations/" \
+  -H "Content-Type: application/json" \
+  -d '[{"contract_number": "C001", "amount": 1000}, ...]'
+```
+
+### Import Structure
+
+```python
+# Core async operations for large datasets
+from django_drf_extensions.mixins import AsyncOperationsMixin
+
+# Immediate sync operations for small datasets  
+from django_drf_extensions.mixins import SyncUpsertMixin
+
+# Combined approach (recommended)
+from django_drf_extensions.mixins import AsyncOperationsMixin, SyncUpsertMixin
+
+# Individual mixins for specific needs
+from django_drf_extensions.mixins import (
+    AsyncCreateMixin,
+    AsyncUpdateMixin,
+    AsyncDeleteMixin,
+    AsyncGetMixin,
+    AsyncReplaceMixin,
+)
+
+# Status monitoring
+from django_drf_extensions.views import OperationStatusView
+```
+
+### Endpoint Structure
+
+```bash
+# Async operations (large datasets)
+/api/model/operations/     # GET, POST, PATCH, PUT, DELETE
+
+# Sync operations (small datasets, immediate results)  
+/api/model/upsert/         # POST, PATCH, PUT
+
+# Operation monitoring
+/api/operations/{task_id}/status/  # GET, DELETE
 ```
 
 ## Contributing

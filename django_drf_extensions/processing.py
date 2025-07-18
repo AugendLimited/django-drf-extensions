@@ -138,7 +138,8 @@ def async_update_task(self, serializer_class_path: str, updates_list: list[dict]
     """
     Celery task for async updating of model instances.
     
-    Uses bulk_update to reduce database queries from N+1 to just 2 queries.
+    Efficiently updates multiple instances using optimized database operations
+    to reduce queries from N+1 to just 2 queries.
 
     Args:
         serializer_class_path: Full path to the serializer class
@@ -379,7 +380,7 @@ def async_delete_task(self, model_class_path: str, ids_list: list[int], user_id:
         OperationCache.set_task_progress(task_id, 0, len(ids_list), "Deleting instances...")
         
         with transaction.atomic():
-            # Use bulk delete for efficiency
+            # Use optimized delete operation for efficiency
             deleted_count, _ = model_class.objects.filter(id__in=ids_list).delete()
 
             # Mark successful deletions
@@ -491,8 +492,8 @@ def async_upsert_task(
     """
     Celery task for async upsert (insert or update) of model instances.
     
-    Similar to Django's bulk_create with update_conflicts=True, this function
-    will create new records or update existing ones based on unique field constraints.
+    Intelligent upsert operation that creates new records or updates existing ones
+    based on unique field constraints.
 
     Args:
         serializer_class_path: Full path to the serializer class
