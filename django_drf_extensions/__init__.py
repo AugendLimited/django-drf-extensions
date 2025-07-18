@@ -1,33 +1,19 @@
 """
 Django DRF Extensions - Enhanced operations for Django REST Framework
 
-Provides mixins for ViewSets to handle efficient async and synchronous operations
-using Celery workers with Redis for progress tracking.
+Provides a unified mixin that enhances standard ViewSet endpoints with intelligent 
+sync/async routing and adds /bulk/ endpoints for background processing.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.1.0"
 __author__ = "Konrad Beck"
 __email__ = "konrad.beck@merchantcapital.co.za"
 
 # Make common imports available at package level
-from .mixins import (
-    AsyncCreateMixin,
-    AsyncDeleteMixin,
-    AsyncGetMixin,
-    AsyncOperationsMixin,
-    AsyncReplaceMixin,
-    AsyncUpdateMixin,
-    SyncUpsertMixin,
-)
+from .mixins import OperationsMixin
 from .views import OperationStatusView
 
 __all__ = [
-    "AsyncCreateMixin",
-    "AsyncDeleteMixin", 
-    "AsyncGetMixin",
-    "AsyncOperationsMixin",
-    "AsyncReplaceMixin",
-    "AsyncUpdateMixin",
-    "SyncUpsertMixin",
+    "OperationsMixin",
     "OperationStatusView",
 ]
