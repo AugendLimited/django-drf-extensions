@@ -257,16 +257,13 @@ class OperationsMixin:
             )
 
     def _perform_sync_upsert(self, data_list, unique_fields, update_fields):
-        """Perform the actual sync upsert operation."""
+        """Perform the actual sync upsert operation using Django's update_or_create."""
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
         
         created_ids = []
         updated_ids = []
         errors = []
-        
-        instances_to_create = []
-        instances_to_update = []
         
         # Process and validate all items
         for index, item_data in enumerate(data_list):
@@ -292,25 +289,22 @@ class OperationsMixin:
                         })
                         continue
                     
-                    # Check if record exists
-                    existing_instance = model_class.objects.filter(**unique_filter).first()
-                    
-                    if existing_instance:
-                        # Prepare for update
-                        if update_fields:
-                            update_data = {k: v for k, v in validated_data.items() if k in update_fields}
-                        else:
-                            update_data = {k: v for k, v in validated_data.items() if k not in unique_fields}
-                        
-                        # Apply updates
-                        for field, value in update_data.items():
-                            setattr(existing_instance, field, value)
-                        
-                        instances_to_update.append((index, existing_instance, existing_instance.id))
+                    # Prepare update data
+                    if update_fields:
+                        update_data = {k: v for k, v in validated_data.items() if k in update_fields}
                     else:
-                        # Prepare for creation
-                        instance = model_class(**validated_data)
-                        instances_to_create.append((index, instance))
+                        update_data = {k: v for k, v in validated_data.items() if k not in unique_fields}
+                    
+                    # Use Django's update_or_create for atomic upsert
+                    instance, created = self.get_queryset().update_or_create(
+                        defaults=update_data,
+                        **unique_filter
+                    )
+                    
+                    if created:
+                        created_ids.append(instance.id)
+                    else:
+                        updated_ids.append(instance.id)
                 
                 else:
                     errors.append({
@@ -325,33 +319,6 @@ class OperationsMixin:
                     "error": str(e),
                     "data": item_data
                 })
-        
-        # Perform database operations
-        with transaction.atomic():
-            # Create new instances
-            if instances_to_create:
-                new_instances = [instance for _, instance in instances_to_create]
-                created_instances = model_class.objects.bulk_create(new_instances)
-                created_ids = [instance.id for instance in created_instances]
-            
-            # Update existing instances
-            if instances_to_update:
-                update_instances = [instance for _, instance, _ in instances_to_update]
-                updated_ids = [instance_id for _, _, instance_id in instances_to_update]
-                
-                if update_fields:
-                    fields_to_update = update_fields
-                else:
-                    # Get all non-unique, non-primary-key fields
-                    if update_instances:
-                        first_instance = update_instances[0]
-                        fields_to_update = [field.name for field in first_instance._meta.fields 
-                                          if field.name not in unique_fields and not field.primary_key]
-                    else:
-                        fields_to_update = []
-                
-                if fields_to_update:
-                    model_class.objects.bulk_update(update_instances, fields_to_update, batch_size=1000)
         
         return {
             "message": "Upsert completed successfully",
