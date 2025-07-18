@@ -268,26 +268,39 @@ class OperationsMixin:
         # Process and validate all items
         for index, item_data in enumerate(data_list):
             try:
+                # For upsert operations, we need to validate data differently
+                # to avoid unique constraint errors during validation
                 serializer = serializer_class(data=item_data)
+                
+                # Check if this is a create or update scenario
+                unique_filter = {}
+                missing_fields = []
+                for field in unique_fields:
+                    if field in item_data:
+                        unique_filter[field] = item_data[field]
+                    else:
+                        missing_fields.append(field)
+                
+                if missing_fields:
+                    errors.append({
+                        "index": index,
+                        "error": f"Missing required unique fields: {missing_fields}",
+                        "data": item_data
+                    })
+                    continue
+                
+                # Check if record exists
+                existing_instance = self.get_queryset().filter(**unique_filter).first()
+                
+                if existing_instance:
+                    # Update existing record - validate with instance context
+                    serializer = serializer_class(existing_instance, data=item_data, partial=True)
+                else:
+                    # Create new record - validate normally
+                    serializer = serializer_class(data=item_data)
+                
                 if serializer.is_valid():
                     validated_data = serializer.validated_data
-                    
-                    # Build unique constraint filter
-                    unique_filter = {}
-                    missing_fields = []
-                    for field in unique_fields:
-                        if field in validated_data:
-                            unique_filter[field] = validated_data[field]
-                        else:
-                            missing_fields.append(field)
-                    
-                    if missing_fields:
-                        errors.append({
-                            "index": index,
-                            "error": f"Missing required unique fields: {missing_fields}",
-                            "data": item_data
-                        })
-                        continue
                     
                     # Prepare update data
                     if update_fields:
