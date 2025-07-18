@@ -1,0 +1,60 @@
+[tool.poetry]
+name = "django-drf-extensions"
+version = "0.0.1"
+description = "Django REST Framework extensions for efficient async and synchronous operations with Celery and Redis"
+authors = ["Konrad Beck <konrad.beck@merchantcapital.co.za>"]
+readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/AugendLimited/django-drf-extensions"
+repository = "https://github.com/AugendLimited/django-drf-extensions"
+keywords = ["django", "drf", "rest-framework", "celery", "redis", "async", "upsert", "sync", "operations", "extensions"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.0",
+    "Framework :: Django :: 4.1",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+packages = [
+    { include = "django_drf_extensions" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+Django = ">=4.0,<6.0"
+djangorestframework = ">=3.14.0"
+celery = ">=5.2.0"
+redis = ">=4.3.0"
+django-redis = ">=5.2.0"
+
+[tool.poetry.group.dev.dependencies]
+requests = "^2.31.0"  # For examples and testing
+
+[tool.poetry.group.optional.dependencies]
+# Optional dependencies for enhanced functionality
+django-extensions = "^3.2.0"  # For management commands
+flower = "^2.0.0"  # For Celery monitoring
+
+[tool.poetry.group.reporting.dependencies]
+# Reporting and analytics dependencies
+pandas = "^2.0.0"  # For data manipulation and export
+openpyxl = "^3.1.0"  # For Excel export
+reportlab = "^4.0.0"  # For PDF export
+matplotlib = "^3.7.0"  # For chart generation
+seaborn = "^0.12.0"  # For statistical visualizations
+plotly = "^5.15.0"  # For interactive charts
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
