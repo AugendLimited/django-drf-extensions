@@ -1,42 +1,47 @@
 """
 Operation mixins for DRF ViewSets.
 
-Provides a unified mixin that enhances standard ViewSet endpoints with intelligent 
+Provides a unified mixin that enhances standard ViewSet endpoints with intelligent
 sync/async routing and adds /bulk/ endpoints for background processing.
 """
 
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db import transaction
-from django.core.exceptions import ValidationError
 
 # Optional OpenAPI schema support
 try:
-    from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
     from drf_spectacular.types import OpenApiTypes
+    from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
+
     SPECTACULAR_AVAILABLE = True
 except ImportError:
     SPECTACULAR_AVAILABLE = False
+
     # Create dummy decorator if drf-spectacular is not available
     def extend_schema(*args, **kwargs):
         def decorator(func):
             return func
+
         return decorator
-    
+
     # Create dummy classes for OpenAPI types
     class OpenApiParameter:
         QUERY = "query"
+
         def __init__(self, name, type, location, description, examples=None):
             pass
-    
+
     class OpenApiExample:
         def __init__(self, name, value, description=None):
             pass
-    
+
     class OpenApiTypes:
         STR = "string"
         INT = "integer"
+
 
 from django_drf_extensions.processing import (
     async_create_task,
@@ -51,13 +56,13 @@ from django_drf_extensions.processing import (
 class OperationsMixin:
     """
     Unified mixin providing intelligent sync/async operation routing.
-    
+
     Enhances standard ViewSet endpoints:
     - GET    /api/model/?ids=1,2,3                    # Sync multi-get
     - POST   /api/model/?unique_fields=field1,field2  # Sync upsert
-    - PATCH  /api/model/?unique_fields=field1,field2  # Sync upsert  
+    - PATCH  /api/model/?unique_fields=field1,field2  # Sync upsert
     - PUT    /api/model/?unique_fields=field1,field2  # Sync upsert
-    
+
     Adds /bulk/ endpoints for async processing:
     - GET    /api/model/bulk/?ids=1,2,3               # Async multi-get
     - POST   /api/model/bulk/                         # Async create
@@ -65,8 +70,6 @@ class OperationsMixin:
     - PUT    /api/model/bulk/                         # Async replace/upsert
     - DELETE /api/model/bulk/                         # Async delete
     """
-    
-
 
     def get_serializer(self, *args, **kwargs):
         """Handle array data for serializers."""
@@ -82,57 +85,57 @@ class OperationsMixin:
     def list(self, request, *args, **kwargs):
         """
         Enhanced list endpoint that supports multi-get via ?ids= parameter.
-        
+
         - GET /api/model/                    # Standard list
         - GET /api/model/?ids=1,2,3          # Sync multi-get (small datasets)
         """
         ids_param = request.query_params.get("ids")
         if ids_param:
             return self._sync_multi_get(request, ids_param)
-        
+
         # Standard list behavior
         return super().list(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
         """
         Enhanced create endpoint that supports sync upsert via query params.
-        
+
         - POST /api/model/                                    # Standard single create
         - POST /api/model/?unique_fields=field1,field2       # Sync upsert (array data)
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
-        
+
         # Standard single create behavior
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         """
         Enhanced update endpoint that supports sync upsert via query params.
-        
+
         - PUT /api/model/{id}/                               # Standard single update
         - PUT /api/model/?unique_fields=field1,field2       # Sync upsert (array data)
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
-        
-        # Standard single update behavior  
+
+        # Standard single update behavior
         return super().update(request, *args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
         """
         Enhanced partial update endpoint that supports sync upsert via query params.
-        
+
         - PATCH /api/model/{id}/                             # Standard single partial update
         - PATCH /api/model/?unique_fields=field1,field2     # Sync upsert (array data)
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
-        
-        # Standard single partial update behavior  
+
+        # Standard single partial update behavior
         return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(
@@ -142,22 +145,29 @@ class OperationsMixin:
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Comma-separated unique field names for upsert mode",
-                examples=[OpenApiExample("Fields", value="account_number,email")]
+                examples=[OpenApiExample("Fields", value="account_number,email")],
             ),
             OpenApiParameter(
                 name="update_fields",
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Comma-separated field names to update (optional, auto-inferred if not provided)",
-                examples=[OpenApiExample("Fields", value="business,status")]
+                examples=[OpenApiExample("Fields", value="business,status")],
             ),
             OpenApiParameter(
                 name="max_items",
                 type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
                 description="Maximum items for sync processing (default: 50)",
-                examples=[OpenApiExample("Max Items", value=50)]
-            )
+                examples=[OpenApiExample("Max Items", value=50)],
+            ),
+            OpenApiParameter(
+                name="partial_success",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Allow partial success (default: false). Set to 'true' to allow some records to succeed while others fail.",
+                examples=[OpenApiExample("Partial Success", value="true")],
+            ),
         ],
         request={
             "application/json": {
@@ -169,37 +179,46 @@ class OperationsMixin:
             200: {
                 "description": "Upsert completed successfully - returns updated/created objects",
                 "oneOf": [
-                    {
-                        "type": "object",
-                        "description": "Single object response"
-                    },
-                    {
-                        "type": "array",
-                        "description": "Multiple objects response"
-                    }
-                ]
+                    {"type": "object", "description": "Single object response"},
+                    {"type": "array", "description": "Multiple objects response"},
+                ],
             },
-            400: {
-                "description": "Bad request - missing parameters or invalid data"
-            }
+            207: {
+                "description": "Partial success - some records succeeded, others failed",
+                "type": "object",
+                "properties": {
+                    "success": {
+                        "type": "array",
+                        "description": "Successfully processed records",
+                    },
+                    "errors": {
+                        "type": "array",
+                        "description": "Failed records with error details",
+                    },
+                    "summary": {"type": "object", "description": "Operation summary"},
+                },
+            },
+            400: {"description": "Bad request - missing parameters or invalid data"},
         },
-        description="Upsert multiple instances synchronously. Creates new records or updates existing ones based on unique fields.",
-        summary="Sync upsert (PATCH)"
+        description="Upsert multiple instances synchronously. Creates new records or updates existing ones based on unique fields. Defaults to all-or-nothing behavior unless partial_success=true.",
+        summary="Sync upsert (PATCH)",
     )
     def patch(self, request, *args, **kwargs):
         """
         Handle PATCH requests on list endpoint for sync upsert.
-        
+
         DRF doesn't handle PATCH on list endpoints by default, so we add this method
         to support: PATCH /api/model/?unique_fields=field1,field2
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
-        
+
         # If no unique_fields or not array data, this is invalid
         return Response(
-            {"error": "PATCH on list endpoint requires 'unique_fields' parameter and array data"},
+            {
+                "error": "PATCH on list endpoint requires 'unique_fields' parameter and array data"
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -210,22 +229,29 @@ class OperationsMixin:
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Comma-separated unique field names for upsert mode",
-                examples=[OpenApiExample("Fields", value="account_number,email")]
+                examples=[OpenApiExample("Fields", value="account_number,email")],
             ),
             OpenApiParameter(
                 name="update_fields",
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Comma-separated field names to update (optional, auto-inferred if not provided)",
-                examples=[OpenApiExample("Fields", value="business,status")]
+                examples=[OpenApiExample("Fields", value="business,status")],
             ),
             OpenApiParameter(
                 name="max_items",
                 type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
                 description="Maximum items for sync processing (default: 50)",
-                examples=[OpenApiExample("Max Items", value=50)]
-            )
+                examples=[OpenApiExample("Max Items", value=50)],
+            ),
+            OpenApiParameter(
+                name="partial_success",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Allow partial success (default: false). Set to 'true' to allow some records to succeed while others fail.",
+                examples=[OpenApiExample("Partial Success", value="true")],
+            ),
         ],
         request={
             "application/json": {
@@ -237,41 +263,48 @@ class OperationsMixin:
             200: {
                 "description": "Upsert completed successfully - returns updated/created objects",
                 "oneOf": [
-                    {
-                        "type": "object",
-                        "description": "Single object response"
-                    },
-                    {
-                        "type": "array",
-                        "description": "Multiple objects response"
-                    }
-                ]
+                    {"type": "object", "description": "Single object response"},
+                    {"type": "array", "description": "Multiple objects response"},
+                ],
             },
-            400: {
-                "description": "Bad request - missing parameters or invalid data"
-            }
+            207: {
+                "description": "Partial success - some records succeeded, others failed",
+                "type": "object",
+                "properties": {
+                    "success": {
+                        "type": "array",
+                        "description": "Successfully processed records",
+                    },
+                    "errors": {
+                        "type": "array",
+                        "description": "Failed records with error details",
+                    },
+                    "summary": {"type": "object", "description": "Operation summary"},
+                },
+            },
+            400: {"description": "Bad request - missing parameters or invalid data"},
         },
-        description="Upsert multiple instances synchronously. Creates new records or updates existing ones based on unique fields.",
-        summary="Sync upsert (PUT)"
+        description="Upsert multiple instances synchronously. Creates new records or updates existing ones based on unique fields. Defaults to all-or-nothing behavior unless partial_success=true.",
+        summary="Sync upsert (PUT)",
     )
     def put(self, request, *args, **kwargs):
         """
         Handle PUT requests on list endpoint for sync upsert.
-        
+
         DRF doesn't handle PUT on list endpoints by default, so we add this method
         to support: PUT /api/model/?unique_fields=field1,field2
         """
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
-        
+
         # If no unique_fields or not array data, this is invalid
         return Response(
-            {"error": "PUT on list endpoint requires 'unique_fields' parameter and array data"},
+            {
+                "error": "PUT on list endpoint requires 'unique_fields' parameter and array data"
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
-
-
 
     # =============================================================================
     # Sync Operation Implementations
@@ -295,7 +328,7 @@ class OperationsMixin:
                     "error": f"Too many items for sync processing. Use /bulk/ endpoint for >{max_sync_items} items.",
                     "provided_items": len(ids_list),
                     "max_sync_items": max_sync_items,
-                    "suggestion": "Use GET /bulk/?ids=... for async processing"
+                    "suggestion": "Use GET /bulk/?ids=... for async processing",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -304,20 +337,36 @@ class OperationsMixin:
         queryset = self.get_queryset().filter(id__in=ids_list)
         serializer = self.get_serializer(queryset, many=True)
 
-        return Response({
-            "count": len(serializer.data),
-            "results": serializer.data,
-            "is_sync": True,
-        })
+        return Response(
+            {
+                "count": len(serializer.data),
+                "results": serializer.data,
+                "is_sync": True,
+            }
+        )
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
+        print(
+            f"DEBUG: _sync_upsert called with unique_fields_param: {unique_fields_param}"
+        )  # Debug log
+
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
         if update_fields_param:
-            update_fields = [f.strip() for f in update_fields_param.split(",") if f.strip()]
+            update_fields = [
+                f.strip() for f in update_fields_param.split(",") if f.strip()
+            ]
+
+        # Check if partial success is enabled
+        partial_success = (
+            request.query_params.get("partial_success", "false").lower() == "true"
+        )
+
+        print(f"DEBUG: unique_fields: {unique_fields}")  # Debug log
+        print(f"DEBUG: partial_success: {partial_success}")  # Debug log
 
         data_list = request.data
         if not isinstance(data_list, list):
@@ -334,7 +383,7 @@ class OperationsMixin:
                     "error": f"Too many items for sync processing. Use /bulk/ endpoint for >{max_sync_items} items.",
                     "provided_items": len(data_list),
                     "max_sync_items": max_sync_items,
-                    "suggestion": "Use PATCH /bulk/?unique_fields=... for async processing"
+                    "suggestion": "Use PATCH /bulk/?unique_fields=... for async processing",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -349,33 +398,48 @@ class OperationsMixin:
         if not update_fields:
             update_fields = self._infer_update_fields(data_list, unique_fields)
 
+        print(
+            f"DEBUG: About to call _perform_sync_upsert with {len(data_list)} items"
+        )  # Debug log
+
         # Perform sync upsert
         try:
-            result = self._perform_sync_upsert(data_list, unique_fields, update_fields)
-            return Response(result, status=status.HTTP_200_OK)
+            result = self._perform_sync_upsert(
+                data_list, unique_fields, update_fields, partial_success, request
+            )
+            return result
         except Exception as e:
+            print(f"DEBUG: Exception in _perform_sync_upsert: {e}")  # Debug log
             return Response(
                 {"error": f"Upsert operation failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    def _perform_sync_upsert(self, data_list, unique_fields, update_fields):
+    def _perform_sync_upsert(
+        self,
+        data_list,
+        unique_fields,
+        update_fields,
+        partial_success=False,
+        request=None,
+    ):
         """Perform the actual sync upsert operation using Django's update_or_create."""
+        from django.db import transaction
+        from rest_framework import status
+
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
-        
+
         created_ids = []
         updated_ids = []
         errors = []
         instances = []
-        
-        # Process and validate all items
+        success_data = []
+
+        # First pass: validate all items
+        validation_errors = []
         for index, item_data in enumerate(data_list):
             try:
-                # For upsert operations, we need to validate data differently
-                # to avoid unique constraint errors during validation
-                serializer = serializer_class(data=item_data)
-                
                 # Check if this is a create or update scenario
                 unique_filter = {}
                 missing_fields = []
@@ -384,82 +448,214 @@ class OperationsMixin:
                         unique_filter[field] = item_data[field]
                     else:
                         missing_fields.append(field)
-                
+
                 if missing_fields:
-                    errors.append({
+                    validation_error = {
                         "index": index,
                         "error": f"Missing required unique fields: {missing_fields}",
-                        "data": item_data
-                    })
+                        "data": item_data,
+                    }
+                    validation_errors.append(validation_error)
+                    print(
+                        f"DEBUG: Added validation error for index {index}: {validation_error}"
+                    )  # Debug log
                     continue
-                
+
                 # Check if record exists
                 existing_instance = self.get_queryset().filter(**unique_filter).first()
-                
+
                 if existing_instance:
                     # Update existing record - validate with instance context
-                    serializer = serializer_class(existing_instance, data=item_data, partial=True)
+                    serializer = serializer_class(
+                        existing_instance, data=item_data, partial=True
+                    )
                 else:
                     # Create new record - validate normally
                     serializer = serializer_class(data=item_data)
-                
+
+                if not serializer.is_valid():
+                    validation_error = {
+                        "index": index,
+                        "error": str(serializer.errors),
+                        "data": item_data,
+                    }
+                    validation_errors.append(validation_error)
+                    print(
+                        f"DEBUG: Added serializer validation error for index {index}: {validation_error}"
+                    )  # Debug log
+
+            except (ValidationError, ValueError) as e:
+                validation_error = {"index": index, "error": str(e), "data": item_data}
+                validation_errors.append(validation_error)
+                print(
+                    f"DEBUG: Added exception validation error for index {index}: {validation_error}"
+                )  # Debug log
+
+        print(
+            f"DEBUG: Total validation errors found: {len(validation_errors)}"
+        )  # Debug log
+        print(f"DEBUG: partial_success: {partial_success}")  # Debug log
+
+        # If not allowing partial success and there are validation errors, fail immediately
+        if not partial_success and validation_errors:
+            print(f"DEBUG: Failing immediately due to validation errors")  # Debug log
+            return Response(
+                {
+                    "error": "Validation failed for one or more records",
+                    "errors": validation_errors,
+                    "total_items": len(data_list),
+                    "failed_items": len(validation_errors),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Second pass: process items (with partial success if enabled)
+        for index, item_data in enumerate(data_list):
+            try:
+                # Check if this item already failed validation
+                failed_validation = any(
+                    error["index"] == index for error in validation_errors
+                )
+                if failed_validation:
+                    print(
+                        f"DEBUG: Item at index {index} failed validation, skipping"
+                    )  # Debug log
+                    if partial_success:
+                        error_to_add = next(
+                            error
+                            for error in validation_errors
+                            if error["index"] == index
+                        )
+                        errors.append(error_to_add)
+                        print(
+                            f"DEBUG: Added error to errors list for index {index}"
+                        )  # Debug log
+                    continue
+
+                # Check if this is a create or update scenario
+                unique_filter = {}
+                for field in unique_fields:
+                    unique_filter[field] = item_data[field]
+
+                # Check if record exists
+                existing_instance = self.get_queryset().filter(**unique_filter).first()
+
+                if existing_instance:
+                    # Update existing record - validate with instance context
+                    serializer = serializer_class(
+                        existing_instance, data=item_data, partial=True
+                    )
+                else:
+                    # Create new record - validate normally
+                    serializer = serializer_class(data=item_data)
+
                 if serializer.is_valid():
                     validated_data = serializer.validated_data
-                    
+
                     # Prepare update data
                     if update_fields:
-                        update_data = {k: v for k, v in validated_data.items() if k in update_fields}
+                        update_data = {
+                            k: v
+                            for k, v in validated_data.items()
+                            if k in update_fields
+                        }
                     else:
-                        update_data = {k: v for k, v in validated_data.items() if k not in unique_fields}
-                    
+                        update_data = {
+                            k: v
+                            for k, v in validated_data.items()
+                            if k not in unique_fields
+                        }
+
                     # Use Django's update_or_create for atomic upsert
                     instance, created = self.get_queryset().update_or_create(
-                        defaults=update_data,
-                        **unique_filter
+                        defaults=update_data, **unique_filter
                     )
-                    
+
                     if created:
                         created_ids.append(instance.id)
                     else:
                         updated_ids.append(instance.id)
-                    
+
                     # Add instance to results
                     instances.append(instance)
-                
+
+                    # Serialize for response
+                    instance_serializer = serializer_class(instance)
+                    success_data.append(instance_serializer.data)
+
                 else:
-                    errors.append({
+                    error_info = {
                         "index": index,
                         "error": str(serializer.errors),
-                        "data": item_data
-                    })
-            
+                        "data": item_data,
+                    }
+                    errors.append(error_info)
+
+                    if not partial_success:
+                        # Rollback any successful operations
+                        return Response(
+                            {
+                                "error": "Validation failed during processing",
+                                "errors": [error_info],
+                                "total_items": len(data_list),
+                                "failed_items": 1,
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
             except (ValidationError, ValueError) as e:
-                errors.append({
-                    "index": index,
-                    "error": str(e),
-                    "data": item_data
-                })
-        
-        # Return serialized objects like standard DRF responses
-        if len(instances) == 1:
-            # Single object response (like PATCH /api/model/{id}/)
-            serializer = serializer_class(instances[0])
-            return serializer.data
+                error_info = {"index": index, "error": str(e), "data": item_data}
+                errors.append(error_info)
+
+                if not partial_success:
+                    # Rollback any successful operations
+                    return Response(
+                        {
+                            "error": "Processing failed",
+                            "errors": [error_info],
+                            "total_items": len(data_list),
+                            "failed_items": 1,
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+        print(f"DEBUG: Final errors count: {len(errors)}")  # Debug log
+        print(f"DEBUG: Final success count: {len(success_data)}")  # Debug log
+
+        # Handle response based on mode
+        if partial_success:
+            # Return partial success response with detailed information
+            summary = {
+                "total_items": len(data_list),
+                "successful_items": len(success_data),
+                "failed_items": len(errors),
+                "created_count": len(created_ids),
+                "updated_count": len(updated_ids),
+            }
+
+            return Response(
+                {"success": success_data, "errors": errors, "summary": summary},
+                status=status.HTTP_207_MULTI_STATUS,
+            )
         else:
-            # Multiple objects response (like PATCH with array)
-            serializer = serializer_class(instances, many=True)
-            return serializer.data
+            # Return standard DRF response for all-or-nothing
+            if len(instances) == 1:
+                # Single object response (like PATCH /api/model/{id}/)
+                return Response(success_data[0], status=status.HTTP_200_OK)
+            else:
+                # Multiple objects response (like PATCH with array)
+                return Response(success_data, status=status.HTTP_200_OK)
 
     def _infer_update_fields(self, data_list, unique_fields):
         """Auto-infer update fields from data payload."""
         if not data_list:
             return []
-        
+
         all_fields = set()
         for item in data_list:
             if isinstance(item, dict):
                 all_fields.update(item.keys())
-        
+
         update_fields = list(all_fields - set(unique_fields))
         update_fields.sort()
         return update_fields
@@ -476,11 +672,11 @@ class OperationsMixin:
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Comma-separated list of IDs to retrieve",
-                examples=[OpenApiExample("IDs", value="1,2,3,4,5")]
+                examples=[OpenApiExample("IDs", value="1,2,3,4,5")],
             )
         ],
         description="Retrieve multiple instances asynchronously via background processing.",
-        summary="Async bulk retrieve"
+        summary="Async bulk retrieve",
     )
     def bulk_get(self, request):
         """Async bulk retrieve for large datasets."""
@@ -490,7 +686,7 @@ class OperationsMixin:
                 {"error": "ids parameter is required for bulk get operations"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         try:
             ids_list = [int(id_str.strip()) for id_str in ids_param.split(",")]
         except ValueError:
@@ -503,19 +699,26 @@ class OperationsMixin:
         model_class = self.get_queryset().model
         model_class_path = f"{model_class.__module__}.{model_class.__name__}"
         serializer_class = self.get_serializer_class()
-        serializer_class_path = f"{serializer_class.__module__}.{serializer_class.__name__}"
+        serializer_class_path = (
+            f"{serializer_class.__module__}.{serializer_class.__name__}"
+        )
 
         query_data = {"ids": ids_list}
         user_id = request.user.id if request.user.is_authenticated else None
-        task = async_get_task.delay(model_class_path, serializer_class_path, query_data, user_id)
+        task = async_get_task.delay(
+            model_class_path, serializer_class_path, query_data, user_id
+        )
 
-        return Response({
-            "message": f"Bulk get task started for {len(ids_list)} items",
-            "task_id": task.id,
-            "total_items": len(ids_list),
-            "status_url": f"/api/operations/{task.id}/status/",
-            "is_async": True,
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                "message": f"Bulk get task started for {len(ids_list)} items",
+                "task_id": task.id,
+                "total_items": len(ids_list),
+                "status_url": f"/api/operations/{task.id}/status/",
+                "is_async": True,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=False, methods=["post"], url_path="bulk")
     @extend_schema(
@@ -526,7 +729,7 @@ class OperationsMixin:
             }
         },
         description="Create multiple instances asynchronously via background processing.",
-        summary="Async bulk create"
+        summary="Async bulk create",
     )
     def bulk_create(self, request):
         """Async bulk create for large datasets."""
@@ -545,16 +748,21 @@ class OperationsMixin:
 
         # Start async task
         serializer_class = self.get_serializer_class()
-        serializer_class_path = f"{serializer_class.__module__}.{serializer_class.__name__}"
+        serializer_class_path = (
+            f"{serializer_class.__module__}.{serializer_class.__name__}"
+        )
         user_id = request.user.id if request.user.is_authenticated else None
         task = async_create_task.delay(serializer_class_path, data_list, user_id)
 
-        return Response({
-            "message": f"Bulk create task started for {len(data_list)} items",
-            "task_id": task.id,
-            "total_items": len(data_list),
-            "status_url": f"/api/operations/{task.id}/status/",
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                "message": f"Bulk create task started for {len(data_list)} items",
+                "task_id": task.id,
+                "total_items": len(data_list),
+                "status_url": f"/api/operations/{task.id}/status/",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=False, methods=["patch"], url_path="bulk")
     @extend_schema(
@@ -564,7 +772,7 @@ class OperationsMixin:
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Comma-separated unique field names for upsert mode",
-                examples=[OpenApiExample("Fields", value="account,date")]
+                examples=[OpenApiExample("Fields", value="account,date")],
             )
         ],
         request={
@@ -574,7 +782,7 @@ class OperationsMixin:
             }
         },
         description="Update multiple instances asynchronously. Supports both standard update (with id fields) and upsert mode (with unique_fields parameter).",
-        summary="Async bulk update/upsert"
+        summary="Async bulk update/upsert",
     )
     def bulk_update(self, request):
         """Async bulk update/upsert for large datasets."""
@@ -606,16 +814,21 @@ class OperationsMixin:
 
         # Start async update task
         serializer_class = self.get_serializer_class()
-        serializer_class_path = f"{serializer_class.__module__}.{serializer_class.__name__}"
+        serializer_class_path = (
+            f"{serializer_class.__module__}.{serializer_class.__name__}"
+        )
         user_id = request.user.id if request.user.is_authenticated else None
         task = async_update_task.delay(serializer_class_path, data_list, user_id)
 
-        return Response({
-            "message": f"Bulk update task started for {len(data_list)} items",
-            "task_id": task.id,
-            "total_items": len(data_list),
-            "status_url": f"/api/operations/{task.id}/status/",
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                "message": f"Bulk update task started for {len(data_list)} items",
+                "task_id": task.id,
+                "total_items": len(data_list),
+                "status_url": f"/api/operations/{task.id}/status/",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=False, methods=["put"], url_path="bulk")
     @extend_schema(
@@ -625,7 +838,7 @@ class OperationsMixin:
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Comma-separated unique field names for upsert mode",
-                examples=[OpenApiExample("Fields", value="account,date")]
+                examples=[OpenApiExample("Fields", value="account,date")],
             )
         ],
         request={
@@ -635,7 +848,7 @@ class OperationsMixin:
             }
         },
         description="Replace multiple instances asynchronously. Supports both standard replace (with id fields) and upsert mode (with unique_fields parameter).",
-        summary="Async bulk replace/upsert"
+        summary="Async bulk replace/upsert",
     )
     def bulk_replace(self, request):
         """Async bulk replace/upsert for large datasets."""
@@ -667,16 +880,21 @@ class OperationsMixin:
 
         # Start async replace task
         serializer_class = self.get_serializer_class()
-        serializer_class_path = f"{serializer_class.__module__}.{serializer_class.__name__}"
+        serializer_class_path = (
+            f"{serializer_class.__module__}.{serializer_class.__name__}"
+        )
         user_id = request.user.id if request.user.is_authenticated else None
         task = async_replace_task.delay(serializer_class_path, data_list, user_id)
 
-        return Response({
-            "message": f"Bulk replace task started for {len(data_list)} items",
-            "task_id": task.id,
-            "total_items": len(data_list),
-            "status_url": f"/api/operations/{task.id}/status/",
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                "message": f"Bulk replace task started for {len(data_list)} items",
+                "task_id": task.id,
+                "total_items": len(data_list),
+                "status_url": f"/api/operations/{task.id}/status/",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=False, methods=["delete"], url_path="bulk")
     @extend_schema(
@@ -688,7 +906,7 @@ class OperationsMixin:
             }
         },
         description="Delete multiple instances asynchronously via background processing.",
-        summary="Async bulk delete"
+        summary="Async bulk delete",
     )
     def bulk_delete(self, request):
         """Async bulk delete for large datasets."""
@@ -719,12 +937,15 @@ class OperationsMixin:
         user_id = request.user.id if request.user.is_authenticated else None
         task = async_delete_task.delay(model_class_path, ids_list, user_id)
 
-        return Response({
-            "message": f"Bulk delete task started for {len(ids_list)} items",
-            "task_id": task.id,
-            "total_items": len(ids_list),
-            "status_url": f"/api/operations/{task.id}/status/",
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                "message": f"Bulk delete task started for {len(ids_list)} items",
+                "task_id": task.id,
+                "total_items": len(ids_list),
+                "status_url": f"/api/operations/{task.id}/status/",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     def _bulk_upsert(self, request, data_list, unique_fields_param):
         """Handle async bulk upsert operations."""
@@ -732,7 +953,9 @@ class OperationsMixin:
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
         if update_fields_param:
-            update_fields = [f.strip() for f in update_fields_param.split(",") if f.strip()]
+            update_fields = [
+                f.strip() for f in update_fields_param.split(",") if f.strip()
+            ]
 
         if not unique_fields:
             return Response(
@@ -746,20 +969,27 @@ class OperationsMixin:
 
         # Start async upsert task
         serializer_class = self.get_serializer_class()
-        serializer_class_path = f"{serializer_class.__module__}.{serializer_class.__name__}"
+        serializer_class_path = (
+            f"{serializer_class.__module__}.{serializer_class.__name__}"
+        )
         user_id = request.user.id if request.user.is_authenticated else None
-        task = async_upsert_task.delay(serializer_class_path, data_list, unique_fields, update_fields, user_id)
+        task = async_upsert_task.delay(
+            serializer_class_path, data_list, unique_fields, update_fields, user_id
+        )
 
-        return Response({
-            "message": f"Bulk upsert task started for {len(data_list)} items",
-            "task_id": task.id,
-            "total_items": len(data_list),
-            "unique_fields": unique_fields,
-            "update_fields": update_fields,
-            "status_url": f"/api/operations/{task.id}/status/",
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                "message": f"Bulk upsert task started for {len(data_list)} items",
+                "task_id": task.id,
+                "total_items": len(data_list),
+                "unique_fields": unique_fields,
+                "update_fields": update_fields,
+                "status_url": f"/api/operations/{task.id}/status/",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 # Legacy alias for backwards compatibility during migration
 AsyncOperationsMixin = OperationsMixin
-SyncUpsertMixin = OperationsMixin 
+SyncUpsertMixin = OperationsMixin
