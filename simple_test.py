@@ -9,7 +9,7 @@ headers = {"Authorization": f"Token {token}", "Content-Type": "application/json"
 
 # Test 1: Just the problematic row
 print("=== Test 1: Just the row missing account_number ===")
-url_with_params = "http://localhost:8000/api/loan-accounts/?unique_fields=account_number&partial_success=false"
+url_with_params = "http://localhost:8000/api/loan-accounts/?unique_fields=account_number"
 data = [{"business": 1}]  # Missing account_number
 response = requests.patch(url_with_params, headers=headers, json=data)
 

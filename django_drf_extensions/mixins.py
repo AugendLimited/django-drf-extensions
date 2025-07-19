@@ -347,10 +347,6 @@ class OperationsMixin:
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
-        print(
-            f"DEBUG: _sync_upsert called with unique_fields_param: {unique_fields_param}"
-        )  # Debug log
-
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
         update_fields_param = request.query_params.get("update_fields")
@@ -364,9 +360,6 @@ class OperationsMixin:
         partial_success = (
             request.query_params.get("partial_success", "false").lower() == "true"
         )
-
-        print(f"DEBUG: unique_fields: {unique_fields}")  # Debug log
-        print(f"DEBUG: partial_success: {partial_success}")  # Debug log
 
         data_list = request.data
         if not isinstance(data_list, list):
@@ -398,10 +391,6 @@ class OperationsMixin:
         if not update_fields:
             update_fields = self._infer_update_fields(data_list, unique_fields)
 
-        print(
-            f"DEBUG: About to call _perform_sync_upsert with {len(data_list)} items"
-        )  # Debug log
-
         # Perform sync upsert
         try:
             result = self._perform_sync_upsert(
@@ -409,7 +398,6 @@ class OperationsMixin:
             )
             return result
         except Exception as e:
-            print(f"DEBUG: Exception in _perform_sync_upsert: {e}")  # Debug log
             return Response(
                 {"error": f"Upsert operation failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -456,9 +444,6 @@ class OperationsMixin:
                         "data": item_data,
                     }
                     validation_errors.append(validation_error)
-                    print(
-                        f"DEBUG: Added validation error for index {index}: {validation_error}"
-                    )  # Debug log
                     continue
 
                 # Check if record exists
@@ -480,25 +465,13 @@ class OperationsMixin:
                         "data": item_data,
                     }
                     validation_errors.append(validation_error)
-                    print(
-                        f"DEBUG: Added serializer validation error for index {index}: {validation_error}"
-                    )  # Debug log
 
             except (ValidationError, ValueError) as e:
                 validation_error = {"index": index, "error": str(e), "data": item_data}
                 validation_errors.append(validation_error)
-                print(
-                    f"DEBUG: Added exception validation error for index {index}: {validation_error}"
-                )  # Debug log
-
-        print(
-            f"DEBUG: Total validation errors found: {len(validation_errors)}"
-        )  # Debug log
-        print(f"DEBUG: partial_success: {partial_success}")  # Debug log
 
         # If not allowing partial success and there are validation errors, fail immediately
         if not partial_success and validation_errors:
-            print(f"DEBUG: Failing immediately due to validation errors")  # Debug log
             return Response(
                 {
                     "error": "Validation failed for one or more records",
@@ -517,9 +490,6 @@ class OperationsMixin:
                     error["index"] == index for error in validation_errors
                 )
                 if failed_validation:
-                    print(
-                        f"DEBUG: Item at index {index} failed validation, skipping"
-                    )  # Debug log
                     if partial_success:
                         error_to_add = next(
                             error
@@ -527,9 +497,6 @@ class OperationsMixin:
                             if error["index"] == index
                         )
                         errors.append(error_to_add)
-                        print(
-                            f"DEBUG: Added error to errors list for index {index}"
-                        )  # Debug log
                     continue
 
                 # Check if this is a create or update scenario
@@ -618,9 +585,6 @@ class OperationsMixin:
                         },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-
-        print(f"DEBUG: Final errors count: {len(errors)}")  # Debug log
-        print(f"DEBUG: Final success count: {len(success_data)}")  # Debug log
 
         # Handle response based on mode
         if partial_success:
