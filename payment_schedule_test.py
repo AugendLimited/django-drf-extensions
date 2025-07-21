@@ -9,11 +9,13 @@ headers = {
     "Content-Type": "application/json",
 }
 
-endpoint = "http://localhost:8000/api/businesses/?unique_fields=cif_number"
-data = [{"name": "cif123", "cif_number": "cif123"}]
-response = requests.patch(endpoint, headers=headers, json=data)
+endpoint = "http://localhost:8000/api/payment-schedules/"
+data = [
+    {"frequency": "0 0 * * MON-FRI", "loan_account": 2, "repayment_percentage": 10, "type": "Revenue Repayment"}
+]
+response = requests.post(endpoint, headers=headers, json=data)
 
-print(f"PATCH Upsert Status: {response.status_code}")
+print(f"POST Upsert Status: {response.status_code}")
 try:
     print(f"Response: {response.json()}")
 except Exception:
