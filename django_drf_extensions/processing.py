@@ -519,7 +519,21 @@ def async_upsert_task(
         
         for index, item_data in enumerate(data_list):
             try:
-                serializer = serializer_class(data=item_data)
+                # Pre-process foreign key fields before serializer validation
+                processed_data = item_data.copy()
+                for field_name, field_value in item_data.items():
+                    if hasattr(model_class, field_name) and hasattr(getattr(model_class, field_name), 'field'):
+                        field_obj = getattr(model_class, field_name).field
+                        if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                            # This is a foreign key field, try to get the related object
+                            try:
+                                related_obj = field_obj.related_model.objects.get(pk=field_value)
+                                processed_data[field_name] = related_obj
+                            except field_obj.related_model.DoesNotExist:
+                                result.add_error(index, f"Related object with id {field_value} does not exist for field {field_name}", item_data)
+                                continue
+
+                serializer = serializer_class(data=processed_data)
                 if serializer.is_valid():
                     validated_data = serializer.validated_data
                     
@@ -533,8 +547,26 @@ def async_upsert_task(
                             continue
                     
                     if unique_filter:
-                        # Try to find existing instance
-                        existing_instance = model_class.objects.filter(**unique_filter).first()
+                        # Try to find existing instance - handle foreign key fields properly
+                        db_filter = {}
+                        for field, value in unique_filter.items():
+                            # Check if this is a foreign key field
+                            if hasattr(model_class, field) and hasattr(getattr(model_class, field), 'field'):
+                                field_obj = getattr(model_class, field).field
+                                if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                                    # This is a foreign key, try to get the related object
+                                    try:
+                                        related_obj = field_obj.related_model.objects.get(pk=value)
+                                        db_filter[field] = related_obj
+                                    except field_obj.related_model.DoesNotExist:
+                                        result.add_error(index, f"Related object with id {value} does not exist for field {field}", item_data)
+                                        continue
+                                else:
+                                    db_filter[field] = value
+                            else:
+                                db_filter[field] = value
+
+                        existing_instance = model_class.objects.filter(**db_filter).first()
                         
                         if existing_instance:
                             # Update existing instance

@@ -14,7 +14,7 @@ data = [
     {"monthly_financial_forecast": 1, "year": 2025, "month": 7, "amount": 10000},
     {"monthly_financial_forecast": 2, "year": 2025, "month": 7, "amount": 10000},
 ]
-response = requests.post(endpoint, headers=headers, json=data)
+response = requests.patch(endpoint, headers=headers, json=data)
 
 print(f"PATCH Upsert Status: {response.status_code}")
 try:

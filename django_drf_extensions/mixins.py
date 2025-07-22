@@ -446,17 +446,59 @@ class OperationsMixin:
                     validation_errors.append(validation_error)
                     continue
 
-                # Check if record exists
-                existing_instance = self.get_queryset().filter(**unique_filter).first()
+                # Check if record exists - handle foreign key fields properly
+                db_filter = {}
+                for field, value in unique_filter.items():
+                    # Check if this is a foreign key field
+                    if hasattr(model_class, field) and hasattr(getattr(model_class, field), 'field'):
+                        field_obj = getattr(model_class, field).field
+                        if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                            # This is a foreign key, try to get the related object
+                            try:
+                                related_obj = field_obj.related_model.objects.get(pk=value)
+                                db_filter[field] = related_obj
+                            except field_obj.related_model.DoesNotExist:
+                                validation_error = {
+                                    "index": index,
+                                    "error": f"Related object with id {value} does not exist for field {field}",
+                                    "data": item_data,
+                                }
+                                validation_errors.append(validation_error)
+                                continue
+                        else:
+                            db_filter[field] = value
+                    else:
+                        db_filter[field] = value
+
+                existing_instance = self.get_queryset().filter(**db_filter).first()
+
+                # Pre-process foreign key fields before serializer validation
+                processed_data = item_data.copy()
+                for field_name, field_value in item_data.items():
+                    if hasattr(model_class, field_name) and hasattr(getattr(model_class, field_name), 'field'):
+                        field_obj = getattr(model_class, field_name).field
+                        if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                            # This is a foreign key field, try to get the related object
+                            try:
+                                related_obj = field_obj.related_model.objects.get(pk=field_value)
+                                processed_data[field_name] = related_obj
+                            except field_obj.related_model.DoesNotExist:
+                                validation_error = {
+                                    "index": index,
+                                    "error": f"Related object with id {field_value} does not exist for field {field_name}",
+                                    "data": item_data,
+                                }
+                                validation_errors.append(validation_error)
+                                continue
 
                 if existing_instance:
                     # Update existing record - validate with instance context
                     serializer = serializer_class(
-                        existing_instance, data=item_data, partial=True
+                        existing_instance, data=processed_data, partial=True
                     )
                 else:
                     # Create new record - validate normally
-                    serializer = serializer_class(data=item_data)
+                    serializer = serializer_class(data=processed_data)
 
                 if not serializer.is_valid():
                     validation_error = {
@@ -504,17 +546,59 @@ class OperationsMixin:
                 for field in unique_fields:
                     unique_filter[field] = item_data[field]
 
-                # Check if record exists
-                existing_instance = self.get_queryset().filter(**unique_filter).first()
+                # Check if record exists - handle foreign key fields properly
+                db_filter = {}
+                for field, value in unique_filter.items():
+                    # Check if this is a foreign key field
+                    if hasattr(model_class, field) and hasattr(getattr(model_class, field), 'field'):
+                        field_obj = getattr(model_class, field).field
+                        if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                            # This is a foreign key, try to get the related object
+                            try:
+                                related_obj = field_obj.related_model.objects.get(pk=value)
+                                db_filter[field] = related_obj
+                            except field_obj.related_model.DoesNotExist:
+                                error_info = {
+                                    "index": index,
+                                    "error": f"Related object with id {value} does not exist for field {field}",
+                                    "data": item_data,
+                                }
+                                errors.append(error_info)
+                                continue
+                        else:
+                            db_filter[field] = value
+                    else:
+                        db_filter[field] = value
+
+                existing_instance = self.get_queryset().filter(**db_filter).first()
+
+                # Pre-process foreign key fields before serializer validation
+                processed_data = item_data.copy()
+                for field_name, field_value in item_data.items():
+                    if hasattr(model_class, field_name) and hasattr(getattr(model_class, field_name), 'field'):
+                        field_obj = getattr(model_class, field_name).field
+                        if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                            # This is a foreign key field, try to get the related object
+                            try:
+                                related_obj = field_obj.related_model.objects.get(pk=field_value)
+                                processed_data[field_name] = related_obj
+                            except field_obj.related_model.DoesNotExist:
+                                error_info = {
+                                    "index": index,
+                                    "error": f"Related object with id {field_value} does not exist for field {field_name}",
+                                    "data": item_data,
+                                }
+                                errors.append(error_info)
+                                continue
 
                 if existing_instance:
                     # Update existing record - validate with instance context
                     serializer = serializer_class(
-                        existing_instance, data=item_data, partial=True
+                        existing_instance, data=processed_data, partial=True
                     )
                 else:
                     # Create new record - validate normally
-                    serializer = serializer_class(data=item_data)
+                    serializer = serializer_class(data=processed_data)
 
                 if serializer.is_valid():
                     validated_data = serializer.validated_data
@@ -535,7 +619,7 @@ class OperationsMixin:
 
                     # Use Django's update_or_create for atomic upsert
                     instance, created = self.get_queryset().update_or_create(
-                        defaults=update_data, **unique_filter
+                        defaults=update_data, **db_filter
                     )
 
                     if created:
