@@ -501,11 +501,22 @@ class OperationsMixin:
 
                 # Check if this is a create or update scenario
                 unique_filter = {}
+                lookup_filter = {}
                 for field in unique_fields:
                     unique_filter[field] = item_data[field]
+                    # For foreign key fields, use _id suffix in lookup filter
+                    if hasattr(model_class, field) and hasattr(getattr(model_class, field), 'field'):
+                        field_obj = getattr(model_class, field).field
+                        if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                            # This is a foreign key, use _id suffix for lookup
+                            lookup_filter[f"{field}_id"] = item_data[field]
+                        else:
+                            lookup_filter[field] = item_data[field]
+                    else:
+                        lookup_filter[field] = item_data[field]
 
                 # Check if record exists
-                existing_instance = self.get_queryset().filter(**unique_filter).first()
+                existing_instance = self.get_queryset().filter(**lookup_filter).first()
 
                 if existing_instance:
                     # Update existing record - validate with instance context
@@ -535,7 +546,7 @@ class OperationsMixin:
 
                     # Use Django's update_or_create for atomic upsert
                     instance, created = self.get_queryset().update_or_create(
-                        defaults=update_data, **unique_filter
+                        defaults=update_data, **lookup_filter
                     )
 
                     if created:

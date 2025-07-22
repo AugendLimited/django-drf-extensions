@@ -525,16 +525,27 @@ def async_upsert_task(
                     
                     # Check if record exists based on unique fields
                     unique_filter = {}
+                    lookup_filter = {}
                     for field in unique_fields:
                         if field in validated_data:
                             unique_filter[field] = validated_data[field]
+                            # For foreign key fields, use _id suffix in lookup filter
+                            if hasattr(model_class, field) and hasattr(getattr(model_class, field), 'field'):
+                                field_obj = getattr(model_class, field).field
+                                if hasattr(field_obj, 'related_model') and field_obj.related_model:
+                                    # This is a foreign key, use _id suffix for lookup
+                                    lookup_filter[f"{field}_id"] = validated_data[field]
+                                else:
+                                    lookup_filter[field] = validated_data[field]
+                            else:
+                                lookup_filter[field] = validated_data[field]
                         else:
                             result.add_error(index, f"Missing required unique field: {field}", item_data)
                             continue
                     
                     if unique_filter:
                         # Try to find existing instance
-                        existing_instance = model_class.objects.filter(**unique_filter).first()
+                        existing_instance = model_class.objects.filter(**lookup_filter).first()
                         
                         if existing_instance:
                             # Update existing instance
