@@ -468,6 +468,15 @@ class OperationsMixin:
 
             except (ValidationError, ValueError) as e:
                 validation_error = {"index": index, "error": str(e), "data": item_data}
+                
+                # Add debugging info for SlugRelatedField issues
+                if "expected a number but got" in str(e):
+                    validation_error["debug_info"] = {
+                        "error_type": "SlugRelatedField_validation",
+                        "issue": "SlugRelatedField failed to convert slug to object",
+                        "suggestion": "Check if the slug values exist in the related queryset"
+                    }
+                
                 validation_errors.append(validation_error)
 
         # If not allowing partial success and there are validation errors, fail immediately
