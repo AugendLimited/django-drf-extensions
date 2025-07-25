@@ -568,24 +568,24 @@ class OperationsMixin:
 
                 if existing_instance:
                     # Update existing record - validate with instance context
-                    logger.debug(
-                        f"DEBUG: Creating serializer for UPDATE with instance {existing_instance.id}"
+                    print(
+                        f"DEBUG: Creating serializer for UPDATE with instance {existing_instance.id}", file=sys.stderr
                     )
                     serializer = serializer_class(
                         existing_instance, data=item_data, partial=True
                     )
                 else:
                     # Create new record - validate normally
-                    logger.debug(f"DEBUG: Creating serializer for CREATE")
+                    print(f"DEBUG: Creating serializer for CREATE", file=sys.stderr)
                     serializer = serializer_class(data=item_data)
 
-                logger.debug(f"DEBUG: About to validate serializer for index {index}")
+                print(f"DEBUG: About to validate serializer for index {index}", file=sys.stderr)
                 # Add debugging for SlugRelatedField issues
                 if not serializer.is_valid():
-                    logger.debug(
-                        f"DEBUG: Serializer validation failed for index {index}"
+                    print(
+                        f"DEBUG: Serializer validation failed for index {index}", file=sys.stderr
                     )
-                    logger.debug(f"DEBUG: Errors: {serializer.errors}")
+                    print(f"DEBUG: Errors: {serializer.errors}", file=sys.stderr)
                     # Check if this is a SlugRelatedField error
                     for field_name, field_errors in serializer.errors.items():
                         if any(
@@ -593,17 +593,17 @@ class OperationsMixin:
                             for error in field_errors
                         ):
                             # This is a SlugRelatedField issue - add debugging info
-                            logger.debug(
-                                f"DEBUG: SlugRelatedField error for field '{field_name}'"
+                            print(
+                                f"DEBUG: SlugRelatedField error for field '{field_name}'", file=sys.stderr
                             )
-                            logger.debug(
-                                f"DEBUG: Provided value: {item_data.get(field_name)}"
+                            print(
+                                f"DEBUG: Provided value: {item_data.get(field_name)}", file=sys.stderr
                             )
-                            logger.debug(
-                                f"DEBUG: Serializer context: {getattr(serializer, 'context', 'No context')}"
+                            print(
+                                f"DEBUG: Serializer context: {getattr(serializer, 'context', 'No context')}", file=sys.stderr
                             )
-                            logger.debug(
-                                f"DEBUG: Serializer instance: {getattr(serializer, 'instance', 'No instance')}"
+                            print(
+                                f"DEBUG: Serializer instance: {getattr(serializer, 'instance', 'No instance')}", file=sys.stderr
                             )
 
                 if serializer.is_valid():
