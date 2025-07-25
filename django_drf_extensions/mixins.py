@@ -5,9 +5,12 @@ Provides a unified mixin that enhances standard ViewSet endpoints with intellige
 sync/async routing and adds /bulk/ endpoints for background processing.
 """
 
-import logging
+import sys
 
-logger = logging.getLogger(__name__)
+# Test logging immediately
+print("DEBUG: django_drf_extensions.mixins module loaded", file=sys.stderr)
+print("INFO: django_drf_extensions.mixins module loaded", file=sys.stderr)
+print("WARNING: django_drf_extensions.mixins module loaded", file=sys.stderr)
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -74,13 +77,28 @@ class OperationsMixin:
     - PUT    /api/model/bulk/                         # Async replace/upsert
     - DELETE /api/model/bulk/                         # Async delete
     """
+    
+    def __init__(self, *args, **kwargs):
+        print("DEBUG: OperationsMixin __init__ called", file=sys.stderr)
+        super().__init__(*args, **kwargs)
 
     def get_serializer(self, *args, **kwargs):
         """Handle array data for serializers."""
-        data = kwargs.get("data", None)
-        if data is not None and isinstance(data, list):
-            kwargs["many"] = True
-        return super().get_serializer(*args, **kwargs)
+        try:
+            print(f"DEBUG: get_serializer called with args: {args}", file=sys.stderr)
+            print(f"DEBUG: get_serializer called with kwargs: {kwargs}", file=sys.stderr)
+            
+            data = kwargs.get("data", None)
+            if data is not None and isinstance(data, list):
+                print(f"DEBUG: Setting many=True for list data", file=sys.stderr)
+                kwargs["many"] = True
+            
+            print(f"DEBUG: Calling super().get_serializer", file=sys.stderr)
+            return super().get_serializer(*args, **kwargs)
+        except Exception as e:
+            print(f"DEBUG: Exception in get_serializer: {str(e)}", file=sys.stderr)
+            print(f"DEBUG: Exception type: {type(e)}", file=sys.stderr)
+            raise
 
     # =============================================================================
     # Enhanced Standard ViewSet Methods (Sync Operations)
@@ -135,21 +153,28 @@ class OperationsMixin:
         - PATCH /api/model/{id}/                             # Standard single partial update
         - PATCH /api/model/?unique_fields=field1,field2     # Sync upsert (array data)
         """
-        logger.debug(f"DEBUG: partial_update method called")
-        logger.debug(f"DEBUG: Request data type: {type(request.data)}")
-        logger.debug(f"DEBUG: Request data: {request.data}")
-        logger.debug(f"DEBUG: Query params: {request.query_params}")
-        
-        unique_fields_param = request.query_params.get("unique_fields")
-        logger.debug(f"DEBUG: unique_fields_param: {unique_fields_param}")
-        
-        if unique_fields_param and isinstance(request.data, list):
-            logger.debug(f"DEBUG: Calling _sync_upsert")
-            return self._sync_upsert(request, unique_fields_param)
+        try:
+            print("DEBUG: partial_update method called", file=sys.stderr)
+            print(f"DEBUG: Request data type: {type(request.data)}", file=sys.stderr)
+            print(f"DEBUG: Request data: {request.data}", file=sys.stderr)
+            print(f"DEBUG: Query params: {request.query_params}", file=sys.stderr)
+            
+            unique_fields_param = request.query_params.get("unique_fields")
+            print(f"DEBUG: unique_fields_param: {unique_fields_param}", file=sys.stderr)
+            
+            if unique_fields_param and isinstance(request.data, list):
+                print(f"DEBUG: Calling _sync_upsert", file=sys.stderr)
+                return self._sync_upsert(request, unique_fields_param)
 
-        logger.debug(f"DEBUG: Calling standard partial_update")
-        # Standard single partial update behavior
-        return super().partial_update(request, *args, **kwargs)
+            print(f"DEBUG: Calling standard partial_update", file=sys.stderr)
+            # Standard single partial update behavior
+            return super().partial_update(request, *args, **kwargs)
+        except Exception as e:
+            print(f"DEBUG: Exception in partial_update: {str(e)}", file=sys.stderr)
+            print(f"DEBUG: Exception type: {type(e)}", file=sys.stderr)
+            import traceback
+            print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr)
+            raise
 
     @extend_schema(
         parameters=[
@@ -360,11 +385,11 @@ class OperationsMixin:
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
-        logger.debug(f"DEBUG: Starting _sync_upsert with unique_fields_param: {unique_fields_param}")
+        print(f"DEBUG: Starting _sync_upsert with unique_fields_param: {unique_fields_param}", file=sys.stderr)
         
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
-        logger.debug(f"DEBUG: Parsed unique_fields: {unique_fields}")
+        print(f"DEBUG: Parsed unique_fields: {unique_fields}", file=sys.stderr)
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
         if update_fields_param:
@@ -407,6 +432,7 @@ class OperationsMixin:
         if not update_fields:
             update_fields = self._infer_update_fields(data_list, unique_fields)
 
+        print(f"DEBUG: About to call _perform_sync_upsert", file=sys.stderr)
         # Perform sync upsert
         try:
             result = self._perform_sync_upsert(
@@ -414,6 +440,7 @@ class OperationsMixin:
             )
             return result
         except Exception as e:
+            print(f"DEBUG: Exception in _sync_upsert: {str(e)}", file=sys.stderr)
             return Response(
                 {"error": f"Upsert operation failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -431,13 +458,9 @@ class OperationsMixin:
         from django.db import transaction
         from rest_framework import status
 
-        logger.debug(
-            f"DEBUG: Starting _perform_sync_upsert with {len(data_list)} items"
-        )
-        logger.debug(f"DEBUG: Unique fields: {unique_fields}")
-        logger.debug(
-            f"DEBUG: First item data: {data_list[0] if data_list else 'No data'}"
-        )
+        print(f"DEBUG: Starting _perform_sync_upsert with {len(data_list)} items", file=sys.stderr)
+        print(f"DEBUG: Unique fields: {unique_fields}", file=sys.stderr)
+        print(f"DEBUG: First item data: {data_list[0] if data_list else 'No data'}", file=sys.stderr)
 
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
@@ -450,9 +473,9 @@ class OperationsMixin:
 
         # First pass: check for missing unique fields only
         validation_errors = []
-        logger.debug(f"DEBUG: Starting first validation pass")
+        print(f"DEBUG: Starting first validation pass", file=sys.stderr)
         for index, item_data in enumerate(data_list):
-            logger.debug(f"DEBUG: Processing item {index}: {item_data}")
+            print(f"DEBUG: Processing item {index}: {item_data}", file=sys.stderr)
             try:
                 # Check if this is a create or update scenario
                 unique_filter = {}
@@ -476,12 +499,12 @@ class OperationsMixin:
                 # This prevents SlugRelatedField validation issues during initial check
 
             except (ValidationError, ValueError) as e:
-                logger.debug(f"DEBUG: Caught exception for item {index}: {str(e)}")
+                print(f"DEBUG: Caught exception for item {index}: {str(e)}", file=sys.stderr)
                 validation_error = {"index": index, "error": str(e), "data": item_data}
 
                 # Add debugging info for SlugRelatedField issues
                 if "expected a number but got" in str(e):
-                    logger.debug(f"DEBUG: This is a SlugRelatedField error!")
+                    print(f"DEBUG: This is a SlugRelatedField error!", file=sys.stderr)
                     validation_error["debug_info"] = {
                         "error_type": "SlugRelatedField_validation",
                         "issue": "SlugRelatedField failed to convert slug to object",
