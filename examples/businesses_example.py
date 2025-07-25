@@ -2,7 +2,7 @@
 import requests
 
 
-token = "620742c2cbaeec3e65180813b1558bed46f7bae3"
+token = "e7fb63f615fdaa43f3abaa6d9ea90cf4e3095728"
 headers = {
     "Authorization": f"Token {token}",
     "accept": "application/json",
