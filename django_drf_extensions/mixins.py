@@ -424,7 +424,7 @@ class OperationsMixin:
         instances = []
         success_data = []
 
-        # First pass: validate all items
+        # First pass: check for missing unique fields only
         validation_errors = []
         for index, item_data in enumerate(data_list):
             try:
@@ -446,37 +446,20 @@ class OperationsMixin:
                     validation_errors.append(validation_error)
                     continue
 
-                # Check if record exists
-                existing_instance = self.get_queryset().filter(**unique_filter).first()
-
-                if existing_instance:
-                    # Update existing record - validate with instance context
-                    serializer = serializer_class(
-                        existing_instance, data=item_data, partial=True
-                    )
-                else:
-                    # Create new record - validate normally
-                    serializer = serializer_class(data=item_data)
-
-                if not serializer.is_valid():
-                    validation_error = {
-                        "index": index,
-                        "error": str(serializer.errors),
-                        "data": item_data,
-                    }
-                    validation_errors.append(validation_error)
+                # Skip full validation here - will validate during actual operation
+                # This prevents SlugRelatedField validation issues during initial check
 
             except (ValidationError, ValueError) as e:
                 validation_error = {"index": index, "error": str(e), "data": item_data}
-                
+
                 # Add debugging info for SlugRelatedField issues
                 if "expected a number but got" in str(e):
                     validation_error["debug_info"] = {
                         "error_type": "SlugRelatedField_validation",
                         "issue": "SlugRelatedField failed to convert slug to object",
-                        "suggestion": "Check if the slug values exist in the related queryset"
+                        "suggestion": "Check if the slug values exist in the related queryset",
                     }
-                
+
                 validation_errors.append(validation_error)
 
         # If not allowing partial success and there are validation errors, fail immediately
