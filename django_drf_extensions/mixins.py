@@ -517,15 +517,22 @@ class OperationsMixin:
 
                 if existing_instance:
                     # Update existing record - validate with instance context
+                    print(
+                        f"DEBUG: Creating serializer for UPDATE with instance {existing_instance.id}"
+                    )
                     serializer = serializer_class(
                         existing_instance, data=item_data, partial=True
                     )
                 else:
                     # Create new record - validate normally
+                    print(f"DEBUG: Creating serializer for CREATE")
                     serializer = serializer_class(data=item_data)
 
+                print(f"DEBUG: About to validate serializer for index {index}")
                 # Add debugging for SlugRelatedField issues
                 if not serializer.is_valid():
+                    print(f"DEBUG: Serializer validation failed for index {index}")
+                    print(f"DEBUG: Errors: {serializer.errors}")
                     # Check if this is a SlugRelatedField error
                     for field_name, field_errors in serializer.errors.items():
                         if any(
