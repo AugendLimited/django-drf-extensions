@@ -5,6 +5,10 @@ Provides a unified mixin that enhances standard ViewSet endpoints with intellige
 sync/async routing and adds /bulk/ endpoints for background processing.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rest_framework import status
@@ -517,7 +521,7 @@ class OperationsMixin:
 
                 if existing_instance:
                     # Update existing record - validate with instance context
-                    print(
+                    logger.debug(
                         f"DEBUG: Creating serializer for UPDATE with instance {existing_instance.id}"
                     )
                     serializer = serializer_class(
@@ -525,14 +529,16 @@ class OperationsMixin:
                     )
                 else:
                     # Create new record - validate normally
-                    print(f"DEBUG: Creating serializer for CREATE")
+                    logger.debug(f"DEBUG: Creating serializer for CREATE")
                     serializer = serializer_class(data=item_data)
 
-                print(f"DEBUG: About to validate serializer for index {index}")
+                logger.debug(f"DEBUG: About to validate serializer for index {index}")
                 # Add debugging for SlugRelatedField issues
                 if not serializer.is_valid():
-                    print(f"DEBUG: Serializer validation failed for index {index}")
-                    print(f"DEBUG: Errors: {serializer.errors}")
+                    logger.debug(
+                        f"DEBUG: Serializer validation failed for index {index}"
+                    )
+                    logger.debug(f"DEBUG: Errors: {serializer.errors}")
                     # Check if this is a SlugRelatedField error
                     for field_name, field_errors in serializer.errors.items():
                         if any(
@@ -540,14 +546,16 @@ class OperationsMixin:
                             for error in field_errors
                         ):
                             # This is a SlugRelatedField issue - add debugging info
-                            print(
+                            logger.debug(
                                 f"DEBUG: SlugRelatedField error for field '{field_name}'"
                             )
-                            print(f"DEBUG: Provided value: {item_data.get(field_name)}")
-                            print(
+                            logger.debug(
+                                f"DEBUG: Provided value: {item_data.get(field_name)}"
+                            )
+                            logger.debug(
                                 f"DEBUG: Serializer context: {getattr(serializer, 'context', 'No context')}"
                             )
-                            print(
+                            logger.debug(
                                 f"DEBUG: Serializer instance: {getattr(serializer, 'instance', 'No instance')}"
                             )
 
