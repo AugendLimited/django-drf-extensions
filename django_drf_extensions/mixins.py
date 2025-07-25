@@ -573,23 +573,45 @@ class OperationsMixin:
                 # Check if this is a create or update scenario
                 unique_filter = {}
                 lookup_filter = {}
+                
+                # Create a temporary serializer to check field types
+                temp_serializer = serializer_class()
+                serializer_fields = temp_serializer.get_fields()
+                
                 for field in unique_fields:
                     unique_filter[field] = item_data[field]
-                    # For foreign key fields, use _id suffix in lookup filter
-                    if hasattr(model_class, field) and hasattr(
-                        getattr(model_class, field), "field"
-                    ):
-                        field_obj = getattr(model_class, field).field
-                        if (
-                            hasattr(field_obj, "related_model")
-                            and field_obj.related_model
+                    
+                    # Check if this field is a SlugRelatedField in the serializer
+                    serializer_field = serializer_fields.get(field)
+                    if serializer_field and isinstance(serializer_field, serializers.SlugRelatedField):
+                        # For SlugRelatedField, we need to convert the slug to the actual object
+                        # and then use the object's ID for the lookup
+                        print(f"DEBUG: Field '{field}' is a SlugRelatedField", file=sys.stderr)
+                        try:
+                            # Get the related object using the slug
+                            related_obj = serializer_field.queryset.get(**{serializer_field.slug_field: item_data[field]})
+                            lookup_filter[f"{field}_id"] = related_obj.id
+                            print(f"DEBUG: Converted '{field}' slug '{item_data[field]}' to ID {related_obj.id}", file=sys.stderr)
+                        except Exception as e:
+                            print(f"DEBUG: Failed to convert '{field}' slug '{item_data[field]}' to object: {e}", file=sys.stderr)
+                            # If we can't convert, skip this field for now
+                            continue
+                    else:
+                        # For regular fields, use the original logic
+                        if hasattr(model_class, field) and hasattr(
+                            getattr(model_class, field), "field"
                         ):
-                            # This is a foreign key, use _id suffix for lookup
-                            lookup_filter[f"{field}_id"] = item_data[field]
+                            field_obj = getattr(model_class, field).field
+                            if (
+                                hasattr(field_obj, "related_model")
+                                and field_obj.related_model
+                            ):
+                                # This is a foreign key, use _id suffix for lookup
+                                lookup_filter[f"{field}_id"] = item_data[field]
+                            else:
+                                lookup_filter[field] = item_data[field]
                         else:
                             lookup_filter[field] = item_data[field]
-                    else:
-                        lookup_filter[field] = item_data[field]
 
                 print(
                     f"DEBUG: Lookup filter for item {index}: {lookup_filter}",
