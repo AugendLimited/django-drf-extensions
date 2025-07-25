@@ -351,8 +351,11 @@ class OperationsMixin:
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
+        logger.debug(f"DEBUG: Starting _sync_upsert with unique_fields_param: {unique_fields_param}")
+        
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
+        logger.debug(f"DEBUG: Parsed unique_fields: {unique_fields}")
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
         if update_fields_param:
@@ -419,6 +422,14 @@ class OperationsMixin:
         from django.db import transaction
         from rest_framework import status
 
+        logger.debug(
+            f"DEBUG: Starting _perform_sync_upsert with {len(data_list)} items"
+        )
+        logger.debug(f"DEBUG: Unique fields: {unique_fields}")
+        logger.debug(
+            f"DEBUG: First item data: {data_list[0] if data_list else 'No data'}"
+        )
+
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
 
@@ -430,7 +441,9 @@ class OperationsMixin:
 
         # First pass: check for missing unique fields only
         validation_errors = []
+        logger.debug(f"DEBUG: Starting first validation pass")
         for index, item_data in enumerate(data_list):
+            logger.debug(f"DEBUG: Processing item {index}: {item_data}")
             try:
                 # Check if this is a create or update scenario
                 unique_filter = {}
@@ -454,10 +467,12 @@ class OperationsMixin:
                 # This prevents SlugRelatedField validation issues during initial check
 
             except (ValidationError, ValueError) as e:
+                logger.debug(f"DEBUG: Caught exception for item {index}: {str(e)}")
                 validation_error = {"index": index, "error": str(e), "data": item_data}
 
                 # Add debugging info for SlugRelatedField issues
                 if "expected a number but got" in str(e):
+                    logger.debug(f"DEBUG: This is a SlugRelatedField error!")
                     validation_error["debug_info"] = {
                         "error_type": "SlugRelatedField_validation",
                         "issue": "SlugRelatedField failed to convert slug to object",
