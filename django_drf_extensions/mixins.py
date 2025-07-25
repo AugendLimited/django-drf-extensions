@@ -14,7 +14,7 @@ print("WARNING: django_drf_extensions.mixins module loaded", file=sys.stderr)
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
