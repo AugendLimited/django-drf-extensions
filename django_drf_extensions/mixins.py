@@ -590,11 +590,27 @@ class OperationsMixin:
                     instance_serializer = serializer_class(instance)
                     success_data.append(instance_serializer.data)
                 else:
+                    # Enhanced error handling for SlugRelatedField issues
                     error_info = {
                         "index": index,
                         "error": str(serializer.errors),
                         "data": item_data,
                     }
+
+                    # Add debugging information for SlugRelatedField issues (without changing core logic)
+                    if serializer.errors:
+                        for field_name, field_errors in serializer.errors.items():
+                            if any(
+                                "expected a number but got" in str(error)
+                                for error in field_errors
+                            ):
+                                error_info["debug_info"] = {
+                                    "field": field_name,
+                                    "provided_value": item_data.get(field_name),
+                                    "field_type": "SlugRelatedField",
+                                    "issue": "SlugRelatedField validation failed - check if slug exists in queryset",
+                                }
+
                     errors.append(error_info)
 
                     if not partial_success:
