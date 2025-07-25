@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 import requests
 
-
-token = "e7fb63f615fdaa43f3abaa6d9ea90cf4e3095728"
+token = "0718bce74f66b18547b54059a7a1081133ac3b7d"
 headers = {
     "Authorization": f"Token {token}",
     "accept": "application/json",
     "Content-Type": "application/json",
 }
 
-endpoint = "http://localhost:8000/api/businesses/?unique_fields=cif_number"
+endpoint = "https://sit-sg.augend.io/api/businesses/?unique_fields=cif_number"
 data = [{"name": "cif123", "cif_number": "cif123"}]
 response = requests.patch(endpoint, headers=headers, json=data)
 

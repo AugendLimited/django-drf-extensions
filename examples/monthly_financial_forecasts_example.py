@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import requests
 
-
 token = "b8c2ee3c5e210015c431a5b08109c253c18b3170"
 headers = {
     "Authorization": f"Token {token}",
@@ -9,7 +8,7 @@ headers = {
     "Content-Type": "application/json",
 }
 
-endpoint = "http://localhost:8000/api/monthly-financial-forecasts/?unique_fields=financial_account,year,month"
+endpoint = "https://sit-sg.augend.io/api/monthly-financial-forecasts/?unique_fields=financial_account,year,month"
 data = [
     {"financial_account": 2, "year": 2025, "month": 7},
     {"financial_account": 3, "year": 2025, "month": 7},
