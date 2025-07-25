@@ -135,10 +135,19 @@ class OperationsMixin:
         - PATCH /api/model/{id}/                             # Standard single partial update
         - PATCH /api/model/?unique_fields=field1,field2     # Sync upsert (array data)
         """
+        logger.debug(f"DEBUG: partial_update method called")
+        logger.debug(f"DEBUG: Request data type: {type(request.data)}")
+        logger.debug(f"DEBUG: Request data: {request.data}")
+        logger.debug(f"DEBUG: Query params: {request.query_params}")
+        
         unique_fields_param = request.query_params.get("unique_fields")
+        logger.debug(f"DEBUG: unique_fields_param: {unique_fields_param}")
+        
         if unique_fields_param and isinstance(request.data, list):
+            logger.debug(f"DEBUG: Calling _sync_upsert")
             return self._sync_upsert(request, unique_fields_param)
 
+        logger.debug(f"DEBUG: Calling standard partial_update")
         # Standard single partial update behavior
         return super().partial_update(request, *args, **kwargs)
 
