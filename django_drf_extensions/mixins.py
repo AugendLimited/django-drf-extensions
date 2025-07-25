@@ -567,6 +567,9 @@ class OperationsMixin:
                         errors.append(error_to_add)
                     continue
 
+                print(
+                    f"DEBUG: Building lookup filter for item {index}", file=sys.stderr
+                )
                 # Check if this is a create or update scenario
                 unique_filter = {}
                 lookup_filter = {}
@@ -588,8 +591,20 @@ class OperationsMixin:
                     else:
                         lookup_filter[field] = item_data[field]
 
+                print(
+                    f"DEBUG: Lookup filter for item {index}: {lookup_filter}",
+                    file=sys.stderr,
+                )
                 # Check if record exists using raw data first
+                print(
+                    f"DEBUG: About to query database for existing instance",
+                    file=sys.stderr,
+                )
                 existing_instance = self.get_queryset().filter(**lookup_filter).first()
+                print(
+                    f"DEBUG: Database query completed, existing_instance: {existing_instance}",
+                    file=sys.stderr,
+                )
 
                 if existing_instance:
                     # Update existing record - validate with instance context
@@ -640,7 +655,12 @@ class OperationsMixin:
                                 file=sys.stderr,
                             )
 
+                print(f"DEBUG: About to check if serializer is valid", file=sys.stderr)
                 if serializer.is_valid():
+                    print(
+                        f"DEBUG: Serializer is valid, getting validated_data",
+                        file=sys.stderr,
+                    )
                     validated_data = serializer.validated_data
 
                     # Prepare update data
