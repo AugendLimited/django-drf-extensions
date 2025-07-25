@@ -524,6 +524,26 @@ class OperationsMixin:
                     # Create new record - validate normally
                     serializer = serializer_class(data=item_data)
 
+                # Add debugging for SlugRelatedField issues
+                if not serializer.is_valid():
+                    # Check if this is a SlugRelatedField error
+                    for field_name, field_errors in serializer.errors.items():
+                        if any(
+                            "expected a number but got" in str(error)
+                            for error in field_errors
+                        ):
+                            # This is a SlugRelatedField issue - add debugging info
+                            print(
+                                f"DEBUG: SlugRelatedField error for field '{field_name}'"
+                            )
+                            print(f"DEBUG: Provided value: {item_data.get(field_name)}")
+                            print(
+                                f"DEBUG: Serializer context: {getattr(serializer, 'context', 'No context')}"
+                            )
+                            print(
+                                f"DEBUG: Serializer instance: {getattr(serializer, 'instance', 'No instance')}"
+                            )
+
                 if serializer.is_valid():
                     validated_data = serializer.validated_data
 
