@@ -476,7 +476,6 @@ class OperationsMixin:
 
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
-        queryset = self.get_queryset()
 
         created_ids = []
         updated_ids = []
@@ -546,18 +545,7 @@ class OperationsMixin:
             f"DEBUG: Starting second pass - processing {len(data_list)} items",
             file=sys.stderr,
         )
-        # Second pass: bulk processing using Django's bulk operations
-        print(
-            f"DEBUG: Starting bulk processing for {len(data_list)} items",
-            file=sys.stderr,
-        )
-
-        # Prepare data for bulk operations
-        to_create = []
-        to_update = []
-        existing_instances = {}
-
-        # First, validate all data and prepare bulk operation data
+        # Second pass: process items (with partial success if enabled)
         for index, item_data in enumerate(data_list):
             print(f"DEBUG: Second pass - processing item {index}", file=sys.stderr)
             try:
@@ -585,40 +573,27 @@ class OperationsMixin:
                 # Check if this is a create or update scenario
                 unique_filter = {}
                 lookup_filter = {}
-
+                
                 # Create a temporary serializer to check field types
                 temp_serializer = serializer_class()
                 serializer_fields = temp_serializer.get_fields()
-
+                
                 for field in unique_fields:
                     unique_filter[field] = item_data[field]
-
+                    
                     # Check if this field is a SlugRelatedField in the serializer
                     serializer_field = serializer_fields.get(field)
-                    if serializer_field and isinstance(
-                        serializer_field, serializers.SlugRelatedField
-                    ):
+                    if serializer_field and isinstance(serializer_field, serializers.SlugRelatedField):
                         # For SlugRelatedField, we need to convert the slug to the actual object
                         # and then use the object's ID for the lookup
-                        print(
-                            f"DEBUG: Field '{field}' is a SlugRelatedField",
-                            file=sys.stderr,
-                        )
+                        print(f"DEBUG: Field '{field}' is a SlugRelatedField", file=sys.stderr)
                         try:
                             # Get the related object using the slug
-                            related_obj = serializer_field.queryset.get(
-                                **{serializer_field.slug_field: item_data[field]}
-                            )
+                            related_obj = serializer_field.queryset.get(**{serializer_field.slug_field: item_data[field]})
                             lookup_filter[f"{field}_id"] = related_obj.id
-                            print(
-                                f"DEBUG: Converted '{field}' slug '{item_data[field]}' to ID {related_obj.id}",
-                                file=sys.stderr,
-                            )
+                            print(f"DEBUG: Converted '{field}' slug '{item_data[field]}' to ID {related_obj.id}", file=sys.stderr)
                         except Exception as e:
-                            print(
-                                f"DEBUG: Failed to convert '{field}' slug '{item_data[field]}' to object: {e}",
-                                file=sys.stderr,
-                            )
+                            print(f"DEBUG: Failed to convert '{field}' slug '{item_data[field]}' to object: {e}", file=sys.stderr)
                             # If we can't convert, skip this field for now
                             continue
                     else:
@@ -647,7 +622,7 @@ class OperationsMixin:
                     f"DEBUG: About to query database for existing instance",
                     file=sys.stderr,
                 )
-                existing_instance = queryset.filter(**lookup_filter).first()
+                existing_instance = self.get_queryset().filter(**lookup_filter).first()
                 print(
                     f"DEBUG: Database query completed, existing_instance: {existing_instance}",
                     file=sys.stderr,
@@ -710,20 +685,60 @@ class OperationsMixin:
                     )
                     validated_data = serializer.validated_data
 
-                    # Check if record exists
-                    if existing_instance:
-                        # Prepare for bulk update
-                        to_update.append(
-                            {
-                                "instance": existing_instance,
-                                "data": validated_data,
-                                "index": index,
-                            }
-                        )
-                        existing_instances[index] = existing_instance
+                    # Prepare update data
+                    if update_fields:
+                        update_data = {
+                            k: v
+                            for k, v in validated_data.items()
+                            if k in update_fields
+                        }
                     else:
-                        # Prepare for bulk create
-                        to_create.append({"data": validated_data, "index": index})
+                        update_data = {
+                            k: v
+                            for k, v in validated_data.items()
+                            if k not in unique_fields
+                        }
+
+                    # Use Django's update_or_create for atomic upsert
+                    # For SlugRelatedField, we need to use the validated data for the lookup
+                    final_lookup_filter = {}
+                    for field in unique_fields:
+                        if field in validated_data:
+                            field_value = validated_data[field]
+                            # Handle foreign key fields and SlugRelatedField instances
+                            if hasattr(field_value, "id"):
+                                # This is an object instance (from SlugRelatedField or ForeignKey)
+                                final_lookup_filter[f"{field}_id"] = field_value.id
+                            elif hasattr(model_class, field) and hasattr(
+                                getattr(model_class, field), "field"
+                            ):
+                                field_obj = getattr(model_class, field).field
+                                if (
+                                    hasattr(field_obj, "related_model")
+                                    and field_obj.related_model
+                                ):
+                                    # This is a foreign key, use _id suffix for lookup
+                                    final_lookup_filter[f"{field}_id"] = field_value
+                                else:
+                                    final_lookup_filter[field] = field_value
+                            else:
+                                final_lookup_filter[field] = field_value
+
+                    instance, created = self.get_queryset().update_or_create(
+                        defaults=update_data, **final_lookup_filter
+                    )
+
+                    if created:
+                        created_ids.append(instance.id)
+                    else:
+                        updated_ids.append(instance.id)
+
+                    # Add instance to results
+                    instances.append(instance)
+
+                    # Serialize for response
+                    instance_serializer = serializer_class(instance)
+                    success_data.append(instance_serializer.data)
                 else:
                     # Enhanced error handling for SlugRelatedField issues
                     error_info = {
@@ -775,96 +790,6 @@ class OperationsMixin:
                         },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-
-                # Perform bulk operations
-        print(
-            f"DEBUG: Performing bulk operations - {len(to_create)} to create, {len(to_update)} to update",
-            file=sys.stderr,
-        )
-
-        try:
-            # Bulk create new instances
-            if to_create:
-                print(
-                    f"DEBUG: Starting bulk_create for {len(to_create)} items",
-                    file=sys.stderr,
-                )
-                new_instances = []
-                for item in to_create:
-                    new_instance = model_class(**item["data"])
-                    new_instances.append(new_instance)
-
-                # Use _base_manager to avoid django-bulk-hooks recursion
-                created_instances = model_class._base_manager.bulk_create(new_instances)
-                print(
-                    f"DEBUG: Bulk create completed, created {len(created_instances)} instances",
-                    file=sys.stderr,
-                )
-
-                # Add created instances to results
-                for i, instance in enumerate(created_instances):
-                    created_ids.append(instance.id)
-                    instances.append(instance)
-                    instance_serializer = serializer_class(instance)
-                    success_data.append(instance_serializer.data)
-
-            # Bulk update existing instances
-            if to_update:
-                print(
-                    f"DEBUG: Starting bulk_update for {len(to_update)} items",
-                    file=sys.stderr,
-                )
-                update_instances = []
-                update_fields_list = []
-
-                for item in to_update:
-                    instance = item["instance"]
-                    data = item["data"]
-
-                    # Update instance fields
-                    for field, value in data.items():
-                        if field not in unique_fields:  # Don't update unique fields
-                            setattr(instance, field, value)
-
-                    update_instances.append(instance)
-                    # Collect fields that were updated
-                    update_fields_list.extend(
-                        [field for field in data.keys() if field not in unique_fields]
-                    )
-
-                # Remove duplicates from update fields
-                update_fields_list = list(set(update_fields_list))
-                print(f"DEBUG: Update fields: {update_fields_list}", file=sys.stderr)
-
-                if update_instances:
-                    print(
-                        f"DEBUG: About to call bulk_update with {len(update_instances)} instances",
-                        file=sys.stderr,
-                    )
-                    # Use _base_manager to avoid django-bulk-hooks recursion
-                    model_class._base_manager.bulk_update(
-                        update_instances, update_fields_list
-                    )
-                    print(
-                        f"DEBUG: Bulk update completed for {len(update_instances)} instances",
-                        file=sys.stderr,
-                    )
-
-                    # Add updated instances to results
-                    for item in to_update:
-                        instance = item["instance"]
-                        updated_ids.append(instance.id)
-                        instances.append(instance)
-                        instance_serializer = serializer_class(instance)
-                        success_data.append(instance_serializer.data)
-
-        except Exception as e:
-            import traceback
-
-            print(f"DEBUG: Exception in bulk operations: {str(e)}", file=sys.stderr)
-            print(f"DEBUG: Full traceback:", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            raise
 
         # Handle response based on mode
         if partial_success:

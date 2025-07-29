@@ -1,29 +1,18 @@
 #!/usr/bin/env python3
 import requests
 
-token = "0718bce74f66b18547b54059a7a1081133ac3b7d"
+
+token = "e7fb63f615fdaa43f3abaa6d9ea90cf4e3095728"
 headers = {
     "Authorization": f"Token {token}",
     "accept": "application/json",
     "Content-Type": "application/json",
 }
 
-endpoint = "https://sit-sg.augend.io/api/loan-transactions/?unique_fields=loan_account,amount,type,posting_date"
+endpoint = "http://localhost:8000/api/loan-transactions/?unique_fields=loan_account,amount,type,posting_date"
 data = [
-    {
-        "amount": 100,
-        "loan_account": 11,
-        "type": "Disbursement",
-        "status": "Complete",
-        "posting_date": "2025-01-01",
-    },
-    {
-        "amount": 10,
-        "loan_account": 11,
-        "type": "Revenue Repayment",
-        "status": "Complete",
-        "posting_date": "2025-01-01",
-    },
+    {"amount": 100, "loan_account": 2, "type": "Disbursement", "status": "Complete", "posting_date": "2025-01-01"},
+    {"amount": 10, "loan_account": 2, "type": "Revenue Repayment", "status": "Complete", "posting_date": "2025-01-01"},
 ]
 response = requests.patch(endpoint, headers=headers, json=data)
 
