@@ -424,7 +424,7 @@ class OperationsMixin:
         partial_success=False,
         request=None,
     ):
-        """Perform the actual sync upsert operation using Django's update_or_create."""
+        """Perform the actual sync upsert operation using bulk_create for new records."""
         from django.db import transaction
         from rest_framework import status
 
@@ -487,7 +487,12 @@ class OperationsMixin:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Second pass: process items (with partial success if enabled)
+        # Second pass: separate creates and updates for bulk operations
+        to_create = []
+        to_update = []
+        create_indices = []
+        update_indices = []
+
         for index, item_data in enumerate(data_list):
             try:
                 # Check if this item already failed validation
@@ -503,8 +508,8 @@ class OperationsMixin:
                         )
                         errors.append(error_to_add)
                     continue
+
                 # Check if this is a create or update scenario
-                unique_filter = {}
                 lookup_filter = {}
 
                 # Create a temporary serializer to check field types
@@ -512,8 +517,6 @@ class OperationsMixin:
                 serializer_fields = temp_serializer.get_fields()
 
                 for field in unique_fields:
-                    unique_filter[field] = item_data[field]
-
                     # Check if this field is a SlugRelatedField in the serializer
                     serializer_field = serializer_fields.get(field)
                     if serializer_field and isinstance(
@@ -551,113 +554,19 @@ class OperationsMixin:
                 existing_instance = self.get_queryset().filter(**lookup_filter).first()
 
                 if existing_instance:
-                    # Update existing record - validate with instance context
-                    serializer = serializer_class(
-                        existing_instance, data=item_data, partial=True
-                    )
+                    # Update existing record
+                    to_update.append((index, item_data, existing_instance))
+                    update_indices.append(index)
                 else:
-                    # Create new record - validate normally
-                    serializer = serializer_class(data=item_data)
-
-                if serializer.is_valid():
-                    validated_data = serializer.validated_data
-
-                    # Prepare update data
-                    if update_fields:
-                        update_data = {
-                            k: v
-                            for k, v in validated_data.items()
-                            if k in update_fields
-                        }
-                    else:
-                        update_data = {
-                            k: v
-                            for k, v in validated_data.items()
-                            if k not in unique_fields
-                        }
-
-                    # Use Django's update_or_create for atomic upsert
-                    # For SlugRelatedField, we need to use the validated data for the lookup
-                    final_lookup_filter = {}
-                    for field in unique_fields:
-                        if field in validated_data:
-                            field_value = validated_data[field]
-                            # Handle foreign key fields and SlugRelatedField instances
-                            if hasattr(field_value, "id"):
-                                # This is an object instance (from SlugRelatedField or ForeignKey)
-                                final_lookup_filter[f"{field}_id"] = field_value.id
-                            elif hasattr(model_class, field) and hasattr(
-                                getattr(model_class, field), "field"
-                            ):
-                                field_obj = getattr(model_class, field).field
-                                if (
-                                    hasattr(field_obj, "related_model")
-                                    and field_obj.related_model
-                                ):
-                                    # This is a foreign key, use _id suffix for lookup
-                                    final_lookup_filter[f"{field}_id"] = field_value
-                                else:
-                                    final_lookup_filter[field] = field_value
-                            else:
-                                final_lookup_filter[field] = field_value
-
-                    instance, created = self.get_queryset().update_or_create(
-                        defaults=update_data, **final_lookup_filter
-                    )
-
-                    if created:
-                        created_ids.append(instance.id)
-                    else:
-                        updated_ids.append(instance.id)
-
-                    # Add instance to results
-                    instances.append(instance)
-
-                    # Serialize for response
-                    instance_serializer = serializer_class(instance)
-                    success_data.append(instance_serializer.data)
-                else:
-                    # Enhanced error handling for SlugRelatedField issues
-                    error_info = {
-                        "index": index,
-                        "error": str(serializer.errors),
-                        "data": item_data,
-                    }
-
-                    # Add debugging information for SlugRelatedField issues (without changing core logic)
-                    if serializer.errors:
-                        for field_name, field_errors in serializer.errors.items():
-                            if any(
-                                "expected a number but got" in str(error)
-                                for error in field_errors
-                            ):
-                                error_info["debug_info"] = {
-                                    "field": field_name,
-                                    "provided_value": item_data.get(field_name),
-                                    "field_type": "SlugRelatedField",
-                                    "issue": "SlugRelatedField validation failed - check if slug exists in queryset",
-                                }
-
-                    errors.append(error_info)
-
-                    if not partial_success:
-                        # Rollback any successful operations
-                        return Response(
-                            {
-                                "error": "Validation failed during processing",
-                                "errors": [error_info],
-                                "total_items": len(data_list),
-                                "failed_items": 1,
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    # Create new record
+                    to_create.append((index, item_data))
+                    create_indices.append(index)
 
             except (ValidationError, ValueError) as e:
                 error_info = {"index": index, "error": str(e), "data": item_data}
                 errors.append(error_info)
 
                 if not partial_success:
-                    # Rollback any successful operations
                     return Response(
                         {
                             "error": "Processing failed",
@@ -667,6 +576,209 @@ class OperationsMixin:
                         },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
+
+        # Process creates using bulk_create
+        if to_create:
+            try:
+                # Validate all create data first
+                create_objects = []
+                create_serializers = []
+
+                for index, item_data in to_create:
+                    serializer = serializer_class(data=item_data)
+                    if serializer.is_valid():
+                        validated_data = serializer.validated_data
+                        # Create model instance without saving
+                        instance = model_class(**validated_data)
+                        create_objects.append(instance)
+                        create_serializers.append((index, serializer))
+                    else:
+                        error_info = {
+                            "index": index,
+                            "error": str(serializer.errors),
+                            "data": item_data,
+                        }
+                        errors.append(error_info)
+
+                        if not partial_success:
+                            return Response(
+                                {
+                                    "error": "Validation failed during processing",
+                                    "errors": [error_info],
+                                    "total_items": len(data_list),
+                                    "failed_items": 1,
+                                },
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+
+                # Use bulk_create for new records
+                if create_objects:
+                    created_instances = model_class.objects.bulk_create(
+                        create_objects,
+                        batch_size=1000,  # Adjust batch size as needed
+                        ignore_conflicts=False,
+                    )
+
+                    # Collect created IDs and serialize for response
+                    for i, instance in enumerate(created_instances):
+                        index, serializer = create_serializers[i]
+                        created_ids.append(instance.id)
+                        instances.append(instance)
+
+                        # Serialize for response
+                        instance_serializer = serializer_class(instance)
+                        success_data.append(instance_serializer.data)
+
+            except Exception as e:
+                if not partial_success:
+                    return Response(
+                        {
+                            "error": "Bulk create failed",
+                            "errors": [{"error": str(e)}],
+                            "total_items": len(data_list),
+                            "failed_items": len(to_create),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                else:
+                    # Add all create items to errors for partial success
+                    for index, item_data in to_create:
+                        errors.append(
+                            {
+                                "index": index,
+                                "error": f"Bulk create failed: {str(e)}",
+                                "data": item_data,
+                            }
+                        )
+
+        # Process updates using bulk_update for better performance
+        if to_update:
+            try:
+                # Validate all update data first
+                update_objects = []
+                update_serializers = []
+                update_indices = []
+
+                for index, item_data, existing_instance in to_update:
+                    serializer = serializer_class(
+                        existing_instance, data=item_data, partial=True
+                    )
+
+                    if serializer.is_valid():
+                        validated_data = serializer.validated_data
+
+                        # Prepare update data
+                        if update_fields:
+                            update_data = {
+                                k: v
+                                for k, v in validated_data.items()
+                                if k in update_fields
+                            }
+                        else:
+                            update_data = {
+                                k: v
+                                for k, v in validated_data.items()
+                                if k not in unique_fields
+                            }
+
+                        # Apply updates to the existing instance
+                        for field, value in update_data.items():
+                            setattr(existing_instance, field, value)
+
+                        update_objects.append(existing_instance)
+                        update_serializers.append((index, serializer))
+                        update_indices.append(index)
+                    else:
+                        # Enhanced error handling for SlugRelatedField issues
+                        error_info = {
+                            "index": index,
+                            "error": str(serializer.errors),
+                            "data": item_data,
+                        }
+
+                        # Add debugging information for SlugRelatedField issues
+                        if serializer.errors:
+                            for field_name, field_errors in serializer.errors.items():
+                                if any(
+                                    "expected a number but got" in str(error)
+                                    for error in field_errors
+                                ):
+                                    error_info["debug_info"] = {
+                                        "field": field_name,
+                                        "provided_value": item_data.get(field_name),
+                                        "field_type": "SlugRelatedField",
+                                        "issue": "SlugRelatedField validation failed - check if slug exists in queryset",
+                                    }
+
+                        errors.append(error_info)
+
+                        if not partial_success:
+                            return Response(
+                                {
+                                    "error": "Validation failed during processing",
+                                    "errors": [error_info],
+                                    "total_items": len(data_list),
+                                    "failed_items": 1,
+                                },
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+
+                # Use bulk_update for existing records
+                if update_objects:
+                    # Determine which fields to update
+                    if update_fields:
+                        fields_to_update = update_fields
+                    else:
+                        # Get all fields that were updated (excluding unique fields)
+                        fields_to_update = []
+                        for obj in update_objects:
+                            for field in obj._meta.fields:
+                                if field.name not in unique_fields and hasattr(
+                                    obj, field.name
+                                ):
+                                    fields_to_update.append(field.name)
+                        fields_to_update = list(
+                            set(fields_to_update)
+                        )  # Remove duplicates
+
+                    # Perform bulk update
+                    model_class.objects.bulk_update(
+                        update_objects,
+                        fields=fields_to_update,
+                        batch_size=1000,  # Adjust batch size as needed
+                    )
+
+                    # Collect updated IDs and serialize for response
+                    for i, instance in enumerate(update_objects):
+                        index, serializer = update_serializers[i]
+                        updated_ids.append(instance.id)
+                        instances.append(instance)
+
+                        # Serialize for response
+                        instance_serializer = serializer_class(instance)
+                        success_data.append(instance_serializer.data)
+
+            except Exception as e:
+                if not partial_success:
+                    return Response(
+                        {
+                            "error": "Bulk update failed",
+                            "errors": [{"error": str(e)}],
+                            "total_items": len(data_list),
+                            "failed_items": len(to_update),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                else:
+                    # Add all update items to errors for partial success
+                    for index, item_data, existing_instance in to_update:
+                        errors.append(
+                            {
+                                "index": index,
+                                "error": f"Bulk update failed: {str(e)}",
+                                "data": item_data,
+                            }
+                        )
 
         # Handle response based on mode
         if partial_success:
@@ -955,7 +1067,7 @@ class OperationsMixin:
         summary="Async bulk delete",
     )
     def bulk_delete(self, request):
-        """Async bulk delete for large datasets."""
+        """Async bulk delete for large datasets using efficient bulk operations."""
         ids_list = request.data
         if not isinstance(ids_list, list):
             return Response(
@@ -977,7 +1089,7 @@ class OperationsMixin:
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Start async delete task
+        # Start async delete task with optimized bulk delete
         model_class = self.get_queryset().model
         model_class_path = f"{model_class.__module__}.{model_class.__name__}"
         user_id = request.user.id if request.user.is_authenticated else None
