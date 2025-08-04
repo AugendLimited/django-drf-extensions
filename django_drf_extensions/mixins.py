@@ -7,11 +7,6 @@ sync/async routing and adds /bulk/ endpoints for background processing.
 
 import sys
 
-# Test logging immediately
-print("DEBUG: django_drf_extensions.mixins module loaded", file=sys.stderr)
-print("INFO: django_drf_extensions.mixins module loaded", file=sys.stderr)
-print("WARNING: django_drf_extensions.mixins module loaded", file=sys.stderr)
-
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rest_framework import serializers, status
@@ -79,27 +74,17 @@ class OperationsMixin:
     """
 
     def __init__(self, *args, **kwargs):
-        print("DEBUG: OperationsMixin __init__ called", file=sys.stderr)
         super().__init__(*args, **kwargs)
 
     def get_serializer(self, *args, **kwargs):
         """Handle array data for serializers."""
         try:
-            print(f"DEBUG: get_serializer called with args: {args}", file=sys.stderr)
-            print(
-                f"DEBUG: get_serializer called with kwargs: {kwargs}", file=sys.stderr
-            )
-
             data = kwargs.get("data", None)
             if data is not None and isinstance(data, list):
-                print(f"DEBUG: Setting many=True for list data", file=sys.stderr)
                 kwargs["many"] = True
 
-            print(f"DEBUG: Calling super().get_serializer", file=sys.stderr)
             return super().get_serializer(*args, **kwargs)
         except Exception as e:
-            print(f"DEBUG: Exception in get_serializer: {str(e)}", file=sys.stderr)
-            print(f"DEBUG: Exception type: {type(e)}", file=sys.stderr)
             raise
 
     # =============================================================================
@@ -156,27 +141,14 @@ class OperationsMixin:
         - PATCH /api/model/?unique_fields=field1,field2     # Sync upsert (array data)
         """
         try:
-            print("DEBUG: partial_update method called", file=sys.stderr)
-            print(f"DEBUG: Request data type: {type(request.data)}", file=sys.stderr)
-            print(f"DEBUG: Request data: {request.data}", file=sys.stderr)
-            print(f"DEBUG: Query params: {request.query_params}", file=sys.stderr)
-
             unique_fields_param = request.query_params.get("unique_fields")
-            print(f"DEBUG: unique_fields_param: {unique_fields_param}", file=sys.stderr)
 
             if unique_fields_param and isinstance(request.data, list):
-                print(f"DEBUG: Calling _sync_upsert", file=sys.stderr)
                 return self._sync_upsert(request, unique_fields_param)
 
-            print(f"DEBUG: Calling standard partial_update", file=sys.stderr)
             # Standard single partial update behavior
             return super().partial_update(request, *args, **kwargs)
         except Exception as e:
-            print(f"DEBUG: Exception in partial_update: {str(e)}", file=sys.stderr)
-            print(f"DEBUG: Exception type: {type(e)}", file=sys.stderr)
-            import traceback
-
-            print(f"DEBUG: Traceback: {traceback.format_exc()}", file=sys.stderr)
             raise
 
     @extend_schema(
@@ -388,14 +360,8 @@ class OperationsMixin:
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
-        print(
-            f"DEBUG: Starting _sync_upsert with unique_fields_param: {unique_fields_param}",
-            file=sys.stderr,
-        )
-
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
-        print(f"DEBUG: Parsed unique_fields: {unique_fields}", file=sys.stderr)
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
         if update_fields_param:
@@ -438,7 +404,6 @@ class OperationsMixin:
         if not update_fields:
             update_fields = self._infer_update_fields(data_list, unique_fields)
 
-        print(f"DEBUG: About to call _perform_sync_upsert", file=sys.stderr)
         # Perform sync upsert
         try:
             result = self._perform_sync_upsert(
@@ -446,7 +411,6 @@ class OperationsMixin:
             )
             return result
         except Exception as e:
-            print(f"DEBUG: Exception in _sync_upsert: {str(e)}", file=sys.stderr)
             return Response(
                 {"error": f"Upsert operation failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -464,16 +428,6 @@ class OperationsMixin:
         from django.db import transaction
         from rest_framework import status
 
-        print(
-            f"DEBUG: Starting _perform_sync_upsert with {len(data_list)} items",
-            file=sys.stderr,
-        )
-        print(f"DEBUG: Unique fields: {unique_fields}", file=sys.stderr)
-        print(
-            f"DEBUG: First item data: {data_list[0] if data_list else 'No data'}",
-            file=sys.stderr,
-        )
-
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
 
@@ -485,9 +439,7 @@ class OperationsMixin:
 
         # First pass: check for missing unique fields only
         validation_errors = []
-        print(f"DEBUG: Starting first validation pass", file=sys.stderr)
         for index, item_data in enumerate(data_list):
-            print(f"DEBUG: Processing item {index}: {item_data}", file=sys.stderr)
             try:
                 # Check if this is a create or update scenario
                 unique_filter = {}
@@ -511,15 +463,10 @@ class OperationsMixin:
                 # This prevents SlugRelatedField validation issues during initial check
 
             except (ValidationError, ValueError) as e:
-                print(
-                    f"DEBUG: Caught exception for item {index}: {str(e)}",
-                    file=sys.stderr,
-                )
                 validation_error = {"index": index, "error": str(e), "data": item_data}
 
                 # Add debugging info for SlugRelatedField issues
                 if "expected a number but got" in str(e):
-                    print(f"DEBUG: This is a SlugRelatedField error!", file=sys.stderr)
                     validation_error["debug_info"] = {
                         "error_type": "SlugRelatedField_validation",
                         "issue": "SlugRelatedField failed to convert slug to object",
@@ -530,7 +477,6 @@ class OperationsMixin:
 
         # If not allowing partial success and there are validation errors, fail immediately
         if not partial_success and validation_errors:
-            print(f"DEBUG: Validation errors found, returning 400", file=sys.stderr)
             return Response(
                 {
                     "error": "Validation failed for one or more records",
@@ -541,23 +487,14 @@ class OperationsMixin:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        print(
-            f"DEBUG: Starting second pass - processing {len(data_list)} items",
-            file=sys.stderr,
-        )
         # Second pass: process items (with partial success if enabled)
         for index, item_data in enumerate(data_list):
-            print(f"DEBUG: Second pass - processing item {index}", file=sys.stderr)
             try:
                 # Check if this item already failed validation
                 failed_validation = any(
                     error["index"] == index for error in validation_errors
                 )
                 if failed_validation:
-                    print(
-                        f"DEBUG: Item {index} failed validation, skipping",
-                        file=sys.stderr,
-                    )
                     if partial_success:
                         error_to_add = next(
                             error
@@ -566,34 +503,31 @@ class OperationsMixin:
                         )
                         errors.append(error_to_add)
                     continue
-
-                print(
-                    f"DEBUG: Building lookup filter for item {index}", file=sys.stderr
-                )
                 # Check if this is a create or update scenario
                 unique_filter = {}
                 lookup_filter = {}
-                
+
                 # Create a temporary serializer to check field types
                 temp_serializer = serializer_class()
                 serializer_fields = temp_serializer.get_fields()
-                
+
                 for field in unique_fields:
                     unique_filter[field] = item_data[field]
-                    
+
                     # Check if this field is a SlugRelatedField in the serializer
                     serializer_field = serializer_fields.get(field)
-                    if serializer_field and isinstance(serializer_field, serializers.SlugRelatedField):
+                    if serializer_field and isinstance(
+                        serializer_field, serializers.SlugRelatedField
+                    ):
                         # For SlugRelatedField, we need to convert the slug to the actual object
                         # and then use the object's ID for the lookup
-                        print(f"DEBUG: Field '{field}' is a SlugRelatedField", file=sys.stderr)
                         try:
                             # Get the related object using the slug
-                            related_obj = serializer_field.queryset.get(**{serializer_field.slug_field: item_data[field]})
+                            related_obj = serializer_field.queryset.get(
+                                **{serializer_field.slug_field: item_data[field]}
+                            )
                             lookup_filter[f"{field}_id"] = related_obj.id
-                            print(f"DEBUG: Converted '{field}' slug '{item_data[field]}' to ID {related_obj.id}", file=sys.stderr)
                         except Exception as e:
-                            print(f"DEBUG: Failed to convert '{field}' slug '{item_data[field]}' to object: {e}", file=sys.stderr)
                             # If we can't convert, skip this field for now
                             continue
                     else:
@@ -613,76 +547,19 @@ class OperationsMixin:
                         else:
                             lookup_filter[field] = item_data[field]
 
-                print(
-                    f"DEBUG: Lookup filter for item {index}: {lookup_filter}",
-                    file=sys.stderr,
-                )
                 # Check if record exists using raw data first
-                print(
-                    f"DEBUG: About to query database for existing instance",
-                    file=sys.stderr,
-                )
                 existing_instance = self.get_queryset().filter(**lookup_filter).first()
-                print(
-                    f"DEBUG: Database query completed, existing_instance: {existing_instance}",
-                    file=sys.stderr,
-                )
 
                 if existing_instance:
                     # Update existing record - validate with instance context
-                    print(
-                        f"DEBUG: Creating serializer for UPDATE with instance {existing_instance.id}",
-                        file=sys.stderr,
-                    )
                     serializer = serializer_class(
                         existing_instance, data=item_data, partial=True
                     )
                 else:
                     # Create new record - validate normally
-                    print(f"DEBUG: Creating serializer for CREATE", file=sys.stderr)
                     serializer = serializer_class(data=item_data)
 
-                print(
-                    f"DEBUG: About to validate serializer for index {index}",
-                    file=sys.stderr,
-                )
-                # Add debugging for SlugRelatedField issues
-                if not serializer.is_valid():
-                    print(
-                        f"DEBUG: Serializer validation failed for index {index}",
-                        file=sys.stderr,
-                    )
-                    print(f"DEBUG: Errors: {serializer.errors}", file=sys.stderr)
-                    # Check if this is a SlugRelatedField error
-                    for field_name, field_errors in serializer.errors.items():
-                        if any(
-                            "expected a number but got" in str(error)
-                            for error in field_errors
-                        ):
-                            # This is a SlugRelatedField issue - add debugging info
-                            print(
-                                f"DEBUG: SlugRelatedField error for field '{field_name}'",
-                                file=sys.stderr,
-                            )
-                            print(
-                                f"DEBUG: Provided value: {item_data.get(field_name)}",
-                                file=sys.stderr,
-                            )
-                            print(
-                                f"DEBUG: Serializer context: {getattr(serializer, 'context', 'No context')}",
-                                file=sys.stderr,
-                            )
-                            print(
-                                f"DEBUG: Serializer instance: {getattr(serializer, 'instance', 'No instance')}",
-                                file=sys.stderr,
-                            )
-
-                print(f"DEBUG: About to check if serializer is valid", file=sys.stderr)
                 if serializer.is_valid():
-                    print(
-                        f"DEBUG: Serializer is valid, getting validated_data",
-                        file=sys.stderr,
-                    )
                     validated_data = serializer.validated_data
 
                     # Prepare update data
