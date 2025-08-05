@@ -295,6 +295,285 @@ def comparison_with_old_system():
             print(f"  {feature}: {description}")
 
 
+def example_best_practices_for_callers():
+    """
+    Best practices for callers to understand and monitor bulk operations.
+
+    This example shows the recommended approach for:
+    1. Starting bulk operations
+    2. Monitoring progress with intelligent polling
+    3. Handling different job states
+    4. Retrieving results and aggregates
+    5. Error handling and retry strategies
+    """
+
+    import json
+    import time
+    from typing import Any, Dict, Optional
+
+    import requests
+
+    class BulkOperationMonitor:
+        """Helper class for monitoring bulk operations with best practices."""
+
+        def __init__(self, base_url: str):
+            self.base_url = base_url
+            self.session = requests.Session()
+
+        def start_bulk_create(self, data: list) -> Dict[str, Any]:
+            """Start a bulk create operation and return job info."""
+            response = self.session.post(
+                f"{self.base_url}/api/transactions/bulk/",
+                json=data,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+        def poll_job_status(
+            self, job_id: str, max_wait_time: int = 300
+        ) -> Dict[str, Any]:
+            """
+            Poll job status with intelligent backoff and timeout.
+
+            Args:
+                job_id: The job ID to monitor
+                max_wait_time: Maximum time to wait in seconds (default: 5 minutes)
+
+            Returns:
+                Final job status when complete or failed
+            """
+            start_time = time.time()
+            poll_interval = 2  # Start with 2 seconds
+
+            while True:
+                # Check if we've exceeded max wait time
+                if time.time() - start_time > max_wait_time:
+                    raise TimeoutError(
+                        f"Job {job_id} did not complete within {max_wait_time} seconds"
+                    )
+
+                # Get current status
+                status_response = self.session.get(
+                    f"{self.base_url}/api/transactions/jobs/{job_id}/status/"
+                )
+                status_response.raise_for_status()
+                status_data = status_response.json()
+
+                # Print progress information
+                self._print_status_update(status_data)
+
+                # Check if job is complete
+                if status_data["state"] in ["Job Complete", "Failed", "Aborted"]:
+                    return status_data
+
+                # Intelligent polling: increase interval for long-running jobs
+                if status_data["percentage"] > 50:
+                    poll_interval = min(poll_interval * 1.5, 10)  # Cap at 10 seconds
+                elif status_data["percentage"] > 25:
+                    poll_interval = min(poll_interval * 1.2, 5)  # Cap at 5 seconds
+
+                time.sleep(poll_interval)
+
+        def _print_status_update(self, status_data: Dict[str, Any]):
+            """Print a user-friendly status update."""
+            state = status_data["state"]
+            percentage = status_data.get("percentage", 0)
+            message = status_data.get("message", "")
+
+            if state == "In Progress":
+                print(f"🔄 {message} ({percentage}% complete)")
+                if status_data.get("estimated_remaining"):
+                    print(
+                        f"   ⏱️  Estimated time remaining: {status_data['estimated_remaining']}"
+                    )
+            elif state == "Job Complete":
+                print(f"✅ {message}")
+                print(
+                    f"   📊 Success: {status_data.get('success_count', 0)}, Errors: {status_data.get('error_count', 0)}"
+                )
+            elif state == "Failed":
+                print(f"❌ {message}")
+                if status_data.get("errors"):
+                    print(f"   🔍 Errors: {status_data['errors']}")
+            elif state == "Aborted":
+                print(f"⏹️  {message}")
+
+        def get_aggregates(self, job_id: str) -> Dict[str, Any]:
+            """Get aggregate results for a completed job."""
+            response = self.session.get(
+                f"{self.base_url}/api/transactions/jobs/{job_id}/aggregates/"
+            )
+            response.raise_for_status()
+            return response.json()
+
+        def handle_job_completion(
+            self, job_id: str, status_data: Dict[str, Any]
+        ) -> Dict[str, Any]:
+            """
+            Handle job completion and retrieve results.
+
+            Returns:
+                Dictionary with job results and aggregates
+            """
+            result = {"job_id": job_id, "status": status_data, "aggregates": None}
+
+            if status_data["state"] == "Job Complete":
+                try:
+                    aggregates = self.get_aggregates(job_id)
+                    result["aggregates"] = aggregates
+                    print(f"📈 Aggregate results retrieved successfully")
+                except requests.exceptions.HTTPError as e:
+                    print(f"⚠️  Could not retrieve aggregates: {e}")
+
+            return result
+
+    # Example usage
+    def demonstrate_best_practices():
+        """Demonstrate the best practices for monitoring bulk operations."""
+
+        monitor = BulkOperationMonitor("http://localhost:8000")
+
+        # 1. Start bulk operation
+        print("🚀 Starting bulk create operation...")
+        sample_data = [
+            {"amount": 100, "description": "Test transaction 1"},
+            {"amount": 200, "description": "Test transaction 2"},
+            {"amount": 300, "description": "Test transaction 3"},
+        ]
+
+        try:
+            job_info = monitor.start_bulk_create(sample_data)
+            job_id = job_info["job_id"]
+
+            print(f"📋 Job created: {job_id}")
+            print(f"📊 Total items: {job_info['total_items']}")
+            print(f"⏱️  Estimated duration: {job_info['estimated_duration']}")
+            print(f"📝 Next steps: {job_info['next_steps']}")
+            print(f"💡 Tips: {job_info['tips']}")
+            print()
+
+            # 2. Monitor progress with intelligent polling
+            print("🔍 Monitoring job progress...")
+            final_status = monitor.poll_job_status(job_id, max_wait_time=60)
+
+            # 3. Handle completion
+            print("\n📋 Processing final results...")
+            results = monitor.handle_job_completion(job_id, final_status)
+
+            # 4. Display results
+            if results["aggregates"]:
+                print(f"📊 Aggregate Results:")
+                print(json.dumps(results["aggregates"], indent=2))
+
+            return results
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Network error: {e}")
+            return None
+        except TimeoutError as e:
+            print(f"⏰ {e}")
+            return None
+        except Exception as e:
+            print(f"💥 Unexpected error: {e}")
+            return None
+
+    # Example of error handling and retry strategies
+    def demonstrate_error_handling():
+        """Demonstrate error handling and retry strategies."""
+
+        monitor = BulkOperationMonitor("http://localhost:8000")
+
+        def retry_with_backoff(func, max_retries=3, base_delay=1):
+            """Retry function with exponential backoff."""
+            for attempt in range(max_retries):
+                try:
+                    return func()
+                except requests.exceptions.RequestException as e:
+                    if attempt == max_retries - 1:
+                        raise e
+                    delay = base_delay * (2**attempt)
+                    print(f"⚠️  Attempt {attempt + 1} failed, retrying in {delay}s...")
+                    time.sleep(delay)
+
+        # Example: Retry job status check
+        try:
+            result = retry_with_backoff(lambda: monitor.poll_job_status("some-job-id"))
+            print("✅ Job monitoring completed successfully")
+        except Exception as e:
+            print(f"❌ All retry attempts failed: {e}")
+
+    # Example of batch processing with progress tracking
+    def demonstrate_batch_processing():
+        """Demonstrate processing multiple batches with progress tracking."""
+
+        monitor = BulkOperationMonitor("http://localhost:8000")
+
+        # Large dataset split into batches
+        large_dataset = [
+            {"amount": i * 100, "description": f"Transaction {i}"}
+            for i in range(1, 1001)  # 1000 items
+        ]
+
+        batch_size = 100
+        batches = [
+            large_dataset[i : i + batch_size]
+            for i in range(0, len(large_dataset), batch_size)
+        ]
+
+        print(f"📦 Processing {len(large_dataset)} items in {len(batches)} batches...")
+
+        completed_jobs = []
+        failed_jobs = []
+
+        for i, batch in enumerate(batches, 1):
+            print(f"\n🔄 Processing batch {i}/{len(batches)} ({len(batch)} items)...")
+
+            try:
+                job_info = monitor.start_bulk_create(batch)
+                final_status = monitor.poll_job_status(job_info["job_id"])
+
+                if final_status["state"] == "Job Complete":
+                    completed_jobs.append(
+                        {
+                            "batch": i,
+                            "job_id": job_info["job_id"],
+                            "success_count": final_status["success_count"],
+                            "error_count": final_status["error_count"],
+                        }
+                    )
+                    print(f"✅ Batch {i} completed successfully")
+                else:
+                    failed_jobs.append(
+                        {
+                            "batch": i,
+                            "job_id": job_info["job_id"],
+                            "state": final_status["state"],
+                        }
+                    )
+                    print(f"❌ Batch {i} failed")
+
+            except Exception as e:
+                print(f"💥 Batch {i} failed with error: {e}")
+                failed_jobs.append({"batch": i, "error": str(e)})
+
+        # Summary
+        print(f"\n📊 Batch Processing Summary:")
+        print(f"   ✅ Completed: {len(completed_jobs)} batches")
+        print(f"   ❌ Failed: {len(failed_jobs)} batches")
+        print(
+            f"   📈 Total successful items: {sum(j['success_count'] for j in completed_jobs)}"
+        )
+        print(f"   ⚠️  Total errors: {sum(j['error_count'] for j in completed_jobs)}")
+
+    return {
+        "demonstrate_best_practices": demonstrate_best_practices,
+        "demonstrate_error_handling": demonstrate_error_handling,
+        "demonstrate_batch_processing": demonstrate_batch_processing,
+        "BulkOperationMonitor": BulkOperationMonitor,
+    }
+
+
 if __name__ == "__main__":
     print("Enhanced Bulk Processing Examples")
     print("=" * 50)

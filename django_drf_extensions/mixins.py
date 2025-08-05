@@ -52,6 +52,10 @@ from django_drf_extensions.enhanced_processing import (
     enhanced_upsert_task,
     run_aggregates_task,
 )
+from django_drf_extensions.event_notifications import (
+    ServerSentEventsView,
+    WebhookRegistrationView,
+)
 from django_drf_extensions.job_state import JobStateManager, JobType
 
 # Keep legacy imports for backward compatibility
@@ -976,13 +980,13 @@ class OperationsMixin:
                 "next_steps": [
                     "Poll status_url every 10 seconds for progress updates",
                     "Check aggregates_url when status shows 'Job Complete'",
-                    "Review any errors in the status response"
+                    "Review any errors in the status response",
                 ],
                 "tips": [
                     "Large batches (>10k items) may take several minutes",
                     "You can safely poll status_url frequently",
-                    "Aggregates are automatically calculated when job completes"
-                ]
+                    "Aggregates are automatically calculated when job completes",
+                ],
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1065,6 +1069,17 @@ class OperationsMixin:
                 "total_items": len(data_list),
                 "status_url": f"/api/jobs/{job.job_id}/status/",
                 "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "estimated_duration": f"{max(1, len(data_list) // 1000)}-{max(2, len(data_list) // 500)} minutes",
+                "next_steps": [
+                    "Poll status_url every 10 seconds for progress updates",
+                    "Check aggregates_url when status shows 'Job Complete'",
+                    "Review any errors in the status response",
+                ],
+                "tips": [
+                    "Large batches (>10k items) may take several minutes",
+                    "You can safely poll status_url frequently",
+                    "Aggregates are automatically calculated when job completes",
+                ],
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1147,6 +1162,17 @@ class OperationsMixin:
                 "total_items": len(data_list),
                 "status_url": f"/api/jobs/{job.job_id}/status/",
                 "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "estimated_duration": f"{max(1, len(data_list) // 1000)}-{max(2, len(data_list) // 500)} minutes",
+                "next_steps": [
+                    "Poll status_url every 10 seconds for progress updates",
+                    "Check aggregates_url when status shows 'Job Complete'",
+                    "Review any errors in the status response",
+                ],
+                "tips": [
+                    "Large batches (>10k items) may take several minutes",
+                    "You can safely poll status_url frequently",
+                    "Aggregates are automatically calculated when job completes",
+                ],
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1212,6 +1238,17 @@ class OperationsMixin:
                 "total_items": len(ids_list),
                 "status_url": f"/api/jobs/{job.job_id}/status/",
                 "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "estimated_duration": f"{max(1, len(ids_list) // 1000)}-{max(2, len(ids_list) // 500)} minutes",
+                "next_steps": [
+                    "Poll status_url every 10 seconds for progress updates",
+                    "Check aggregates_url when status shows 'Job Complete'",
+                    "Review any errors in the status response",
+                ],
+                "tips": [
+                    "Large batches (>10k items) may take several minutes",
+                    "You can safely poll status_url frequently",
+                    "Aggregates are automatically calculated when job completes",
+                ],
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1275,6 +1312,17 @@ class OperationsMixin:
                 "update_fields": update_fields,
                 "status_url": f"/api/jobs/{job.job_id}/status/",
                 "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "estimated_duration": f"{max(1, len(data_list) // 1000)}-{max(2, len(data_list) // 500)} minutes",
+                "next_steps": [
+                    "Poll status_url every 10 seconds for progress updates",
+                    "Check aggregates_url when status shows 'Job Complete'",
+                    "Review any errors in the status response",
+                ],
+                "tips": [
+                    "Large batches (>10k items) may take several minutes",
+                    "You can safely poll status_url frequently",
+                    "Aggregates are automatically calculated when job completes",
+                ],
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1364,6 +1412,186 @@ class OperationsMixin:
             return Response(
                 {"error": f"Failed to start aggregate task: {str(e)}"},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    # =============================================================================
+    # Event Notification Endpoints (Alternatives to Polling)
+    # =============================================================================
+
+    @action(detail=False, methods=["get"], url_path="jobs/(?P<job_id>[^/.]+)/events")
+    def get_job_events_sse(self, request, job_id):
+        """
+        Server-Sent Events endpoint for real-time job status updates.
+
+        GET /api/jobs/{job_id}/events/
+        Accept: text/event-stream
+
+        Usage:
+            const eventSource = new EventSource('/api/jobs/abc123/events/');
+            eventSource.onmessage = (event) => {
+                console.log('Job update:', JSON.parse(event.data));
+            };
+        """
+        return ServerSentEventsView.as_view()(request, job_id=job_id)
+
+    @action(detail=False, methods=["post"], url_path="jobs/webhooks/register")
+    def register_webhook(self, request):
+        """
+        Register a webhook for job notifications.
+
+        POST /api/jobs/webhooks/register/
+
+        Request body:
+        {
+            "webhook_url": "https://your-app.com/webhooks/job-updates",
+            "event_types": ["job_completed", "job_failed"],
+            "headers": {"Authorization": "Bearer token"}
+        }
+        """
+        return WebhookRegistrationView.as_view()(request)
+
+    @action(detail=False, methods=["get"], url_path="jobs/webhooks/list")
+    def list_webhooks(self, request):
+        """
+        List registered webhooks.
+
+        GET /api/jobs/webhooks/list/
+        """
+        return WebhookRegistrationView.as_view()(request)
+
+    @extend_schema(
+        summary="Process transactions with full pipeline",
+        description="Import transactions, aggregate, run credit model, and return offers in a single operation",
+        request=serializers.ListField(
+            child=serializers.DictField(),
+            help_text="List of transaction data to process",
+        ),
+        responses={
+            202: serializers.DictField(
+                fields={
+                    "job_id": serializers.CharField(help_text="Unique job identifier"),
+                    "status_url": serializers.CharField(
+                        help_text="URL to check job status"
+                    ),
+                    "offers_url": serializers.CharField(
+                        help_text="URL to retrieve offers when complete"
+                    ),
+                    "estimated_duration": serializers.CharField(
+                        help_text="Estimated time to completion"
+                    ),
+                    "next_steps": serializers.CharField(help_text="What happens next"),
+                    "tips": serializers.CharField(help_text="Usage tips"),
+                }
+            )
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="process-transactions")
+    def process_transactions_pipeline(self, request):
+        """
+        Single endpoint to process transactions through the complete pipeline:
+        1. Import transactions
+        2. Aggregate data
+        3. Run credit model
+        4. Generate offers
+        """
+        data = request.data.get("data", [])
+        credit_model_config = request.data.get("credit_model_config", {})
+        aggregate_config = request.data.get("aggregate_config", {})
+
+        if not data:
+            return Response(
+                {"error": "No transaction data provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Create pipeline job
+        job_id = JobStateManager.create_job(
+            job_type=JobType.PIPELINE,
+            description=f"Process {len(data)} transactions through complete pipeline",
+            metadata={
+                "transaction_count": len(data),
+                "credit_model_config": credit_model_config,
+                "aggregate_config": aggregate_config,
+                "pipeline_steps": ["import", "aggregate", "credit_model", "offers"],
+            },
+        )
+
+        # Start the pipeline task
+        from .enhanced_processing import process_transactions_pipeline_task
+
+        process_transactions_pipeline_task.delay(
+            job_id=job_id,
+            transaction_data=data,
+            credit_model_config=credit_model_config,
+            aggregate_config=aggregate_config,
+        )
+
+        return Response(
+            {
+                "job_id": job_id,
+                "status_url": f"/api/jobs/{job_id}/status/",
+                "offers_url": f"/api/jobs/{job_id}/offers/",
+                "estimated_duration": "5-10 minutes",
+                "next_steps": "Monitor job status. Offers will be available when pipeline completes.",
+                "tips": "Use the offers_url endpoint to retrieve results when job is complete",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @extend_schema(
+        summary="Get pipeline offers",
+        description="Retrieve offers generated by the transaction processing pipeline",
+        responses={
+            200: serializers.DictField(
+                fields={
+                    "offers": serializers.ListField(
+                        child=serializers.DictField(), help_text="Generated offers"
+                    ),
+                    "pipeline_summary": serializers.DictField(
+                        help_text="Summary of pipeline execution"
+                    ),
+                    "credit_model_results": serializers.DictField(
+                        help_text="Results from credit model processing"
+                    ),
+                }
+            ),
+            404: serializers.DictField(
+                fields={
+                    "error": serializers.CharField(help_text="Error message"),
+                    "job_status": serializers.CharField(help_text="Current job status"),
+                }
+            ),
+        },
+    )
+    @action(detail=False, methods=["get"], url_path="jobs/(?P<job_id>[^/.]+)/offers")
+    def get_pipeline_offers(self, request, job_id=None):
+        """Retrieve offers from a completed pipeline job"""
+        try:
+            job = JobStateManager.get_job(job_id)
+
+            if job.state != JobState.JOB_COMPLETE:
+                return Response(
+                    {"error": "Pipeline not complete", "job_status": job.state.value},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Retrieve offers from job metadata
+            offers = job.metadata.get("offers", [])
+            pipeline_summary = job.metadata.get("pipeline_summary", {})
+            credit_model_results = job.metadata.get("credit_model_results", {})
+
+            return Response(
+                {
+                    "offers": offers,
+                    "pipeline_summary": pipeline_summary,
+                    "credit_model_results": credit_model_results,
+                }
+            )
+
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to retrieve offers: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 

@@ -47,6 +47,7 @@ class JobType(enum.Enum):
     UPSERT = "upsert"
     DELETE = "delete"
     REPLACE = "replace"
+    PIPELINE = "pipeline"
 
 
 class BulkJob:
@@ -315,8 +316,12 @@ class JobStateManager:
             return {"error": "Job not found"}
 
         # Calculate progress percentage
-        percentage = round((job.processed_items / job.total_items) * 100, 2) if job.total_items > 0 else 0
-        
+        percentage = (
+            round((job.processed_items / job.total_items) * 100, 2)
+            if job.total_items > 0
+            else 0
+        )
+
         # Estimate remaining time based on processing rate
         estimated_remaining = None
         if job.state == JobState.IN_PROGRESS and job.processed_items > 0:
@@ -348,39 +353,45 @@ class JobStateManager:
             "aggregates_completed": job.aggregates_completed,
             "next_steps": status_info["next_steps"],
             "can_retry": job.state in [JobState.FAILED, JobState.ABORTED],
-            "errors": getattr(job, 'errors', []) if job.state == JobState.FAILED else None,
+            "errors": getattr(job, "errors", [])
+            if job.state == JobState.FAILED
+            else None,
         }
 
     @classmethod
-    def _get_status_info(cls, job: "BulkJob", percentage: float, estimated_remaining: Optional[str]) -> Dict[str, Any]:
+    def _get_status_info(
+        cls, job: "BulkJob", percentage: float, estimated_remaining: Optional[str]
+    ) -> Dict[str, Any]:
         """Get human-readable status information."""
         if job.state == JobState.OPEN:
             return {
                 "status": "queued",
                 "message": "Job is queued and waiting to start",
-                "next_steps": ["Wait for job to begin processing"]
+                "next_steps": ["Wait for job to begin processing"],
             }
-        
+
         elif job.state == JobState.IN_PROGRESS:
             return {
                 "status": "processing",
                 "message": f"Processing {job.processed_items} of {job.total_items} items ({percentage}% complete)",
                 "next_steps": [
                     f"Continue polling every 10 seconds",
-                    f"Estimated completion: {estimated_remaining}" if estimated_remaining else "Processing in progress"
-                ]
+                    f"Estimated completion: {estimated_remaining}"
+                    if estimated_remaining
+                    else "Processing in progress",
+                ],
             }
-        
+
         elif job.state == JobState.JOB_COMPLETE:
             return {
                 "status": "completed",
                 "message": f"Job completed successfully! Processed {job.success_count} items with {job.error_count} errors",
                 "next_steps": [
                     "Check aggregates_url for results",
-                    "Review any errors in the response"
-                ]
+                    "Review any errors in the response",
+                ],
             }
-        
+
         elif job.state == JobState.FAILED:
             return {
                 "status": "failed",
@@ -388,23 +399,23 @@ class JobStateManager:
                 "next_steps": [
                     "Review error details",
                     "Consider retrying with smaller batch size",
-                    "Check server logs for more details"
-                ]
+                    "Check server logs for more details",
+                ],
             }
-        
+
         elif job.state == JobState.ABORTED:
             return {
                 "status": "aborted",
                 "message": "Job was manually aborted",
                 "next_steps": [
                     "Review why job was aborted",
-                    "Consider restarting the job"
-                ]
+                    "Consider restarting the job",
+                ],
             }
-        
+
         else:
             return {
                 "status": "unknown",
                 "message": f"Job in unknown state: {job.state.value}",
-                "next_steps": ["Contact support for assistance"]
+                "next_steps": ["Contact support for assistance"],
             }
