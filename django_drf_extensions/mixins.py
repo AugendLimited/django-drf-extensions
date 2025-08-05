@@ -223,20 +223,12 @@ class OperationsMixin:
         DRF doesn't handle PATCH on list endpoints by default, so we add this method
         to support: PATCH /api/model/?unique_fields=field1,field2
         """
-        print(f"=== DEBUG: PATCH method called ===", file=sys.stderr)
-        print(f"DEBUG: request.query_params = {request.query_params}", file=sys.stderr)
-        print(f"DEBUG: request.data = {request.data}", file=sys.stderr)
-        print(f"DEBUG: isinstance(request.data, list) = {isinstance(request.data, list)}", file=sys.stderr)
-        
         unique_fields_param = request.query_params.get("unique_fields")
-        print(f"DEBUG: unique_fields_param = {unique_fields_param}", file=sys.stderr)
         
         if unique_fields_param and isinstance(request.data, list):
-            print(f"DEBUG: Calling _sync_upsert", file=sys.stderr)
             return self._sync_upsert(request, unique_fields_param)
 
         # If no unique_fields or not array data, this is invalid
-        print(f"DEBUG: Invalid PATCH request - no unique_fields or not array data", file=sys.stderr)
         return Response(
             {
                 "error": "PATCH on list endpoint requires 'unique_fields' parameter and array data"
@@ -369,14 +361,8 @@ class OperationsMixin:
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
-        print(f"=== DEBUG: Starting _sync_upsert ===", file=sys.stderr)
-        print(f"DEBUG: unique_fields_param = {unique_fields_param}", file=sys.stderr)
-        print(f"DEBUG: request.data = {request.data}", file=sys.stderr)
-        print(f"DEBUG: request.query_params = {request.query_params}", file=sys.stderr)
-        
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
-        print(f"DEBUG: parsed unique_fields = {unique_fields}", file=sys.stderr)
         
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
@@ -384,17 +370,14 @@ class OperationsMixin:
             update_fields = [
                 f.strip() for f in update_fields_param.split(",") if f.strip()
             ]
-        print(f"DEBUG: update_fields = {update_fields}", file=sys.stderr)
 
         # Check if partial success is enabled
         partial_success = (
             request.query_params.get("partial_success", "false").lower() == "true"
         )
-        print(f"DEBUG: partial_success = {partial_success}", file=sys.stderr)
 
         data_list = request.data
         if not isinstance(data_list, list):
-            print(f"DEBUG: data_list is not a list: {type(data_list)}", file=sys.stderr)
             return Response(
                 {"error": "Expected array data for upsert operations."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -403,7 +386,6 @@ class OperationsMixin:
         # Limit for sync processing
         max_sync_items = int(request.query_params.get("max_items", 50))
         if len(data_list) > max_sync_items:
-            print(f"DEBUG: Too many items: {len(data_list)} > {max_sync_items}", file=sys.stderr)
             return Response(
                 {
                     "error": f"Too many items for sync processing. Use /bulk/ endpoint for >{max_sync_items} items.",
@@ -415,7 +397,6 @@ class OperationsMixin:
             )
 
         if not unique_fields:
-            print(f"DEBUG: No unique fields provided", file=sys.stderr)
             return Response(
                 {"error": "unique_fields parameter is required for upsert operations"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -424,18 +405,14 @@ class OperationsMixin:
         # Auto-infer update_fields if not provided
         if not update_fields:
             update_fields = self._infer_update_fields(data_list, unique_fields)
-            print(f"DEBUG: Auto-inferred update_fields = {update_fields}", file=sys.stderr)
 
         # Perform sync upsert
         try:
-            print(f"DEBUG: Calling _perform_sync_upsert", file=sys.stderr)
             result = self._perform_sync_upsert(
                 data_list, unique_fields, update_fields, partial_success, request
             )
-            print(f"DEBUG: _perform_sync_upsert returned: {result}", file=sys.stderr)
             return result
         except Exception as e:
-            print(f"DEBUG: Exception in _sync_upsert: {e}", file=sys.stderr)
             return Response(
                 {"error": f"Upsert operation failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -453,17 +430,8 @@ class OperationsMixin:
         from django.db import transaction
         from rest_framework import status
 
-        print(f"=== DEBUG: Starting _perform_sync_upsert ===", file=sys.stderr)
-        print(f"DEBUG: data_list = {data_list}", file=sys.stderr)
-        print(f"DEBUG: unique_fields = {unique_fields}", file=sys.stderr)
-        print(f"DEBUG: update_fields = {update_fields}", file=sys.stderr)
-        print(f"DEBUG: partial_success = {partial_success}", file=sys.stderr)
-
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
-
-        print(f"DEBUG: serializer_class = {serializer_class}", file=sys.stderr)
-        print(f"DEBUG: model_class = {model_class}", file=sys.stderr)
 
         created_ids = []
         updated_ids = []
@@ -474,7 +442,6 @@ class OperationsMixin:
         # First pass: check for missing unique fields only
         validation_errors = []
         for index, item_data in enumerate(data_list):
-            print(f"DEBUG: Processing item {index}: {item_data}", file=sys.stderr)
             try:
                 # Check if this is a create or update scenario
                 unique_filter = {}
@@ -482,10 +449,8 @@ class OperationsMixin:
                 for field in unique_fields:
                     if field in item_data:
                         unique_filter[field] = item_data[field]
-                        print(f"DEBUG: Found unique field '{field}' = {item_data[field]}", file=sys.stderr)
                     else:
                         missing_fields.append(field)
-                        print(f"DEBUG: Missing unique field '{field}'", file=sys.stderr)
 
                 if missing_fields:
                     validation_error = {
@@ -494,7 +459,6 @@ class OperationsMixin:
                         "data": item_data,
                     }
                     validation_errors.append(validation_error)
-                    print(f"DEBUG: Validation error for item {index}: {validation_error}", file=sys.stderr)
                     continue
 
                 # Skip full validation here - will validate during actual operation
@@ -512,11 +476,9 @@ class OperationsMixin:
                     }
 
                 validation_errors.append(validation_error)
-                print(f"DEBUG: Validation error for item {index}: {validation_error}", file=sys.stderr)
 
         # If not allowing partial success and there are validation errors, fail immediately
         if not partial_success and validation_errors:
-            print(f"DEBUG: Failing due to validation errors: {validation_errors}", file=sys.stderr)
             return Response(
                 {
                     "error": "Validation failed for one or more records",
@@ -534,14 +496,12 @@ class OperationsMixin:
         update_indices = []
 
         for index, item_data in enumerate(data_list):
-            print(f"DEBUG: Second pass - Processing item {index}: {item_data}", file=sys.stderr)
             try:
                 # Check if this item already failed validation
                 failed_validation = any(
                     error["index"] == index for error in validation_errors
                 )
                 if failed_validation:
-                    print(f"DEBUG: Item {index} failed validation, skipping", file=sys.stderr)
                     if partial_success:
                         error_to_add = next(
                             error
@@ -558,80 +518,56 @@ class OperationsMixin:
                 temp_serializer = serializer_class()
                 serializer_fields = temp_serializer.get_fields()
 
-                print(f"DEBUG: Serializer fields: {list(serializer_fields.keys())}", file=sys.stderr)
-
                 for field in unique_fields:
-                    print(f"DEBUG: Processing unique field '{field}'", file=sys.stderr)
                     # Check if this field is a SlugRelatedField in the serializer
                     serializer_field = serializer_fields.get(field)
-                    print(f"DEBUG: Serializer field for '{field}': {serializer_field}", file=sys.stderr)
-                    print(f"DEBUG: Field type: {type(serializer_field)}", file=sys.stderr)
                     
                     if serializer_field and isinstance(
                         serializer_field, serializers.SlugRelatedField
                     ):
-                        print(f"DEBUG: '{field}' is a SlugRelatedField", file=sys.stderr)
                         # For SlugRelatedField, we need to convert the slug to the actual object
                         # and then use the object's ID for the lookup
                         try:
                             # Get the related object using the slug
-                            print(f"DEBUG: Looking up {field} with value: {item_data[field]}", file=sys.stderr)
-                            print(f"DEBUG: SlugRelatedField queryset: {serializer_field.queryset}", file=sys.stderr)
-                            print(f"DEBUG: SlugRelatedField slug_field: {serializer_field.slug_field}", file=sys.stderr)
-                            
                             related_obj = serializer_field.queryset.get(
                                 **{serializer_field.slug_field: item_data[field]}
                             )
-                            print(f"DEBUG: Found related object: {related_obj}", file=sys.stderr)
                             lookup_filter[f"{field}_id"] = related_obj.id
-                            print(f"DEBUG: Added to lookup_filter: {field}_id = {related_obj.id}", file=sys.stderr)
                         except Exception as e:
-                            print(f"DEBUG: Error looking up {field}: {e}", file=sys.stderr)
                             # If we can't convert, skip this field for now
                             continue
                     else:
-                        print(f"DEBUG: '{field}' is not a SlugRelatedField", file=sys.stderr)
                         # For regular fields, use the original logic
                         if hasattr(model_class, field) and hasattr(
                             getattr(model_class, field), "field"
                         ):
                             field_obj = getattr(model_class, field).field
-                            print(f"DEBUG: Field object for '{field}': {field_obj}", file=sys.stderr)
                             if (
                                 hasattr(field_obj, "related_model")
                                 and field_obj.related_model
                             ):
                                 # This is a foreign key, use _id suffix for lookup
-                                print(f"DEBUG: '{field}' is a foreign key, using {field}_id", file=sys.stderr)
                                 lookup_filter[f"{field}_id"] = item_data[field]
                             else:
-                                print(f"DEBUG: '{field}' is not a foreign key", file=sys.stderr)
                                 lookup_filter[field] = item_data[field]
                         else:
-                            print(f"DEBUG: '{field}' is a regular field", file=sys.stderr)
                             lookup_filter[field] = item_data[field]
-
-                print(f"DEBUG: Final lookup_filter: {lookup_filter}", file=sys.stderr)
 
                 # Check if record exists using raw data first
                 existing_instance = self.get_queryset().filter(**lookup_filter).first()
-                print(f"DEBUG: Existing instance found: {existing_instance}", file=sys.stderr)
 
                 if existing_instance:
                     # Update existing record
                     to_update.append((index, item_data, existing_instance))
                     update_indices.append(index)
-                    print(f"DEBUG: Added to update list: index {index}", file=sys.stderr)
                 else:
                     # Create new record
                     to_create.append((index, item_data))
                     create_indices.append(index)
-                    print(f"DEBUG: Added to create list: index {index}", file=sys.stderr)
 
             except (ValidationError, ValueError) as e:
                 error_info = {"index": index, "error": str(e), "data": item_data}
                 errors.append(error_info)
-                print(f"DEBUG: Error processing item {index}: {error_info}", file=sys.stderr)
 
                 if not partial_success:
                     return Response(
@@ -644,35 +580,27 @@ class OperationsMixin:
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-        print(f"DEBUG: To create: {len(to_create)} items", file=sys.stderr)
-        print(f"DEBUG: To update: {len(to_update)} items", file=sys.stderr)
-
         # Process creates using bulk_create
         if to_create:
-            print(f"DEBUG: Processing {len(to_create)} items to create", file=sys.stderr)
             try:
                 # Validate all create data first
                 create_objects = []
                 create_serializers = []
 
                 for index, item_data in to_create:
-                    print(f"DEBUG: Validating create data for index {index}: {item_data}", file=sys.stderr)
                     serializer = serializer_class(data=item_data)
                     if serializer.is_valid():
                         validated_data = serializer.validated_data
-                        print(f"DEBUG: Validated data for index {index}: {validated_data}", file=sys.stderr)
                         # Create model instance without saving
                         instance = model_class(**validated_data)
                         create_objects.append(instance)
                         create_serializers.append((index, serializer))
-                        print(f"DEBUG: Added to create_objects: {instance}", file=sys.stderr)
                     else:
                         error_info = {
                             "index": index,
                             "error": str(serializer.errors),
                             "data": item_data,
                         }
-                        print(f"DEBUG: Validation failed for create index {index}: {serializer.errors}", file=sys.stderr)
                         errors.append(error_info)
 
                         if not partial_success:
@@ -688,27 +616,23 @@ class OperationsMixin:
 
                 # Use bulk_create for new records
                 if create_objects:
-                    print(f"DEBUG: Performing bulk_create with {len(create_objects)} objects", file=sys.stderr)
                     created_instances = model_class.objects.bulk_create(
                         create_objects,
                         batch_size=1000,  # Adjust batch size as needed
                         ignore_conflicts=False,
                     )
-                    print(f"DEBUG: Created {len(created_instances)} instances", file=sys.stderr)
 
                     # Collect created IDs and serialize for response
                     for i, instance in enumerate(created_instances):
                         index, serializer = create_serializers[i]
                         created_ids.append(instance.id)
                         instances.append(instance)
-                        print(f"DEBUG: Created instance {instance.id} for index {index}", file=sys.stderr)
 
                         # Serialize for response
                         instance_serializer = serializer_class(instance)
                         success_data.append(instance_serializer.data)
 
             except Exception as e:
-                print(f"DEBUG: Exception during bulk_create: {e}", file=sys.stderr)
                 if not partial_success:
                     return Response(
                         {
@@ -732,7 +656,6 @@ class OperationsMixin:
 
         # Process updates using bulk_update for better performance
         if to_update:
-            print(f"DEBUG: Processing {len(to_update)} items to update", file=sys.stderr)
             try:
                 # Validate all update data first
                 update_objects = []
@@ -740,34 +663,12 @@ class OperationsMixin:
                 update_indices = []
 
                 for index, item_data, existing_instance in to_update:
-                    print(f"DEBUG: Validating update data for index {index}: {item_data}", file=sys.stderr)
                     serializer = serializer_class(
                         existing_instance, data=item_data, partial=True
                     )
 
                     if serializer.is_valid():
                         validated_data = serializer.validated_data
-                        print(f"DEBUG: Validated update data for index {index}: {validated_data}", file=sys.stderr)
-                        
-                        # Debug the business field specifically
-                        if 'business' in validated_data:
-                            business_obj = validated_data['business']
-                            print(f"DEBUG: Business object from serializer: {business_obj}", file=sys.stderr)
-                            print(f"DEBUG: Business object type: {type(business_obj)}", file=sys.stderr)
-                            print(f"DEBUG: Business object ID: {getattr(business_obj, 'id', 'NO_ID')}", file=sys.stderr)
-                            print(f"DEBUG: Business object __dict__: {getattr(business_obj, '__dict__', 'NO_DICT')}", file=sys.stderr)
-                            
-                            # Check if we can query this business object directly
-                            try:
-                                from django.db import connection
-                                business_model = business_obj._meta.model
-                                exists = business_model.objects.filter(id=business_obj.id).exists()
-                                print(f"DEBUG: Can query business object directly: {exists}", file=sys.stderr)
-                                if exists:
-                                    db_obj = business_model.objects.get(id=business_obj.id)
-                                    print(f"DEBUG: Database business object: {db_obj}", file=sys.stderr)
-                            except Exception as e:
-                                print(f"DEBUG: Error querying business object: {e}", file=sys.stderr)
 
                         # Prepare update data
                         if update_fields:
@@ -783,31 +684,13 @@ class OperationsMixin:
                                 if k not in unique_fields
                             }
 
-                        print(f"DEBUG: Update data for index {index}: {update_data}", file=sys.stderr)
-
                         # Apply updates to the existing instance
                         for field, value in update_data.items():
                             setattr(existing_instance, field, value)
-                            print(f"DEBUG: Set {field} = {value} on instance {existing_instance.id}", file=sys.stderr)
-                            
-                            # Add detailed debugging for foreign key fields
-                            if hasattr(existing_instance._meta.get_field(field), 'related_model') and existing_instance._meta.get_field(field).related_model:
-                                print(f"DEBUG: Foreign key field '{field}' assigned object: {value}", file=sys.stderr)
-                                print(f"DEBUG: Foreign key object ID: {getattr(value, 'id', 'NO_ID')}", file=sys.stderr)
-                                print(f"DEBUG: Foreign key object type: {type(value)}", file=sys.stderr)
-                                # Check if the object exists in database
-                                try:
-                                    from django.db import connection
-                                    related_model = existing_instance._meta.get_field(field).related_model
-                                    exists = related_model.objects.filter(id=value.id).exists()
-                                    print(f"DEBUG: Foreign key object exists in DB: {exists}", file=sys.stderr)
-                                except Exception as e:
-                                    print(f"DEBUG: Error checking foreign key existence: {e}", file=sys.stderr)
 
                         update_objects.append(existing_instance)
                         update_serializers.append((index, serializer))
                         update_indices.append(index)
-                        print(f"DEBUG: Added to update_objects: {existing_instance}", file=sys.stderr)
                     else:
                         # Enhanced error handling for SlugRelatedField issues
                         error_info = {
@@ -815,7 +698,6 @@ class OperationsMixin:
                             "error": str(serializer.errors),
                             "data": item_data,
                         }
-                        print(f"DEBUG: Validation failed for update index {index}: {serializer.errors}", file=sys.stderr)
 
                         # Add debugging information for SlugRelatedField issues
                         if serializer.errors:
@@ -846,7 +728,6 @@ class OperationsMixin:
 
                 # Use bulk_update for existing records
                 if update_objects:
-                    print(f"DEBUG: Performing bulk_update with {len(update_objects)} objects", file=sys.stderr)
                     # Determine which fields to update
                     if update_fields:
                         # Convert foreign key field names to use _id suffix for bulk_update
@@ -877,47 +758,32 @@ class OperationsMixin:
                             set(fields_to_update)
                         )  # Remove duplicates
 
-                    print(f"DEBUG: Fields to update: {fields_to_update}", file=sys.stderr)
-
-                    # Debug the objects before bulk_update
-                    print(f"DEBUG: Objects to update:", file=sys.stderr)
-                    for i, obj in enumerate(update_objects):
-                        print(f"DEBUG: Object {i}: ID={obj.id}, business_id={getattr(obj, 'business_id', 'NOT_SET')}", file=sys.stderr)
-                        if hasattr(obj, 'business') and obj.business:
-                            print(f"DEBUG: Object {i}: business object ID={obj.business.id}, business object={obj.business}", file=sys.stderr)
-
                     # Check if we have foreign key fields to update
                     has_foreign_keys = any('_id' in field for field in fields_to_update)
                     
                     if has_foreign_keys:
                         # For objects with foreign key updates, use individual save() calls
-                        print(f"DEBUG: Using individual save() calls due to foreign key fields", file=sys.stderr)
                         for obj in update_objects:
                             obj.save()
-                        print(f"DEBUG: Individual saves completed", file=sys.stderr)
                     else:
                         # For regular fields only, use bulk_update
-                        print(f"DEBUG: Using bulk_update for regular fields only", file=sys.stderr)
                         model_class.objects.bulk_update(
                             update_objects,
                             fields=fields_to_update,
                             batch_size=1000,  # Adjust batch size as needed
                         )
-                        print(f"DEBUG: Bulk update completed", file=sys.stderr)
 
                     # Collect updated IDs and serialize for response
                     for i, instance in enumerate(update_objects):
                         index, serializer = update_serializers[i]
                         updated_ids.append(instance.id)
                         instances.append(instance)
-                        print(f"DEBUG: Updated instance {instance.id} for index {index}", file=sys.stderr)
 
                         # Serialize for response
                         instance_serializer = serializer_class(instance)
                         success_data.append(instance_serializer.data)
 
             except Exception as e:
-                print(f"DEBUG: Exception during bulk_update: {e}", file=sys.stderr)
                 if not partial_success:
                     return Response(
                         {
@@ -938,10 +804,6 @@ class OperationsMixin:
                                 "data": item_data,
                             }
                         )
-
-        print(f"DEBUG: Final results - created_ids: {created_ids}, updated_ids: {updated_ids}", file=sys.stderr)
-        print(f"DEBUG: Final results - errors: {errors}", file=sys.stderr)
-        print(f"DEBUG: Final results - success_data: {len(success_data)} items", file=sys.stderr)
 
         # Handle response based on mode
         if partial_success:
