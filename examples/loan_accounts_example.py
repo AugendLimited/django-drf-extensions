@@ -2,7 +2,7 @@
 import requests
 
 
-token = "620742c2cbaeec3e65180813b1558bed46f7bae3"
+token = "bd250ba135df6691c1df709cd574e322d78fae5b"
 headers = {
     "Authorization": f"Token {token}",
     "accept": "application/json",
@@ -10,7 +10,7 @@ headers = {
 }
 
 endpoint = "http://localhost:8000/api/loan-accounts/?unique_fields=account_number"
-data = [{"account_number": "loan-123", "business": 1}]
+data = [{"account_number": "loan-123", "business": 17}, {"account_number": "loan-456", "business": 18}]
 response = requests.patch(endpoint, headers=headers, json=data)
 
 print(f"PATCH Upsert Status: {response.status_code}")
