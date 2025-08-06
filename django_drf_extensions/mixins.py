@@ -5,7 +5,9 @@ Provides a unified mixin that enhances standard ViewSet endpoints with intellige
 sync/async routing and adds /bulk/ endpoints for background processing.
 """
 
+import json
 import sys
+from datetime import datetime
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -56,7 +58,7 @@ from django_drf_extensions.event_notifications import (
     ServerSentEventsView,
     WebhookRegistrationView,
 )
-from django_drf_extensions.job_state import JobStateManager, JobType
+from django_drf_extensions.job_state import JobState, JobStateManager, JobType
 
 # Keep legacy imports for backward compatibility
 from django_drf_extensions.processing import (
@@ -1593,6 +1595,526 @@ class OperationsMixin:
                 {"error": f"Failed to retrieve offers: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @extend_schema(
+        summary="Upload large transaction dataset in chunks",
+        description="Upload large transaction datasets by breaking into manageable chunks. Supports resume capability and progress tracking.",
+        request=serializers.DictField(
+            fields={
+                "chunk_data": serializers.ListField(
+                    child=serializers.DictField(),
+                    help_text="Chunk of transaction data (max 10K records per chunk)",
+                ),
+                "chunk_number": serializers.IntegerField(
+                    help_text="Current chunk number (1-based)"
+                ),
+                "total_chunks": serializers.IntegerField(
+                    help_text="Total number of chunks"
+                ),
+                "session_id": serializers.CharField(
+                    help_text="Unique session ID for this upload"
+                ),
+                "credit_model_config": serializers.DictField(
+                    help_text="Credit model configuration"
+                ),
+                "aggregate_config": serializers.DictField(
+                    help_text="Aggregation configuration"
+                ),
+            }
+        ),
+        responses={
+            202: serializers.DictField(
+                fields={
+                    "session_id": serializers.CharField(
+                        help_text="Upload session identifier"
+                    ),
+                    "chunk_received": serializers.IntegerField(
+                        help_text="Chunk number received"
+                    ),
+                    "total_chunks": serializers.IntegerField(
+                        help_text="Total chunks expected"
+                    ),
+                    "progress": serializers.FloatField(
+                        help_text="Upload progress percentage"
+                    ),
+                    "job_id": serializers.CharField(
+                        help_text="Job ID when all chunks received"
+                    ),
+                    "status_url": serializers.CharField(
+                        help_text="URL to check job status"
+                    ),
+                    "next_chunk": serializers.IntegerField(
+                        help_text="Next chunk to send"
+                    ),
+                }
+            ),
+            200: serializers.DictField(
+                fields={
+                    "session_id": serializers.CharField(
+                        help_text="Upload session identifier"
+                    ),
+                    "job_id": serializers.CharField(help_text="Job ID for processing"),
+                    "status_url": serializers.CharField(
+                        help_text="URL to check job status"
+                    ),
+                    "offers_url": serializers.CharField(
+                        help_text="URL to retrieve offers"
+                    ),
+                    "estimated_duration": serializers.CharField(
+                        help_text="Estimated processing time"
+                    ),
+                    "total_transactions": serializers.IntegerField(
+                        help_text="Total transactions received"
+                    ),
+                }
+            ),
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="upload-chunked")
+    def upload_chunked_transactions(self, request):
+        """
+        Upload large transaction datasets in chunks.
+        Each chunk should contain max 10K records.
+        """
+        chunk_data = request.data.get("chunk_data", [])
+        chunk_number = request.data.get("chunk_number", 1)
+        total_chunks = request.data.get("total_chunks", 1)
+        session_id = request.data.get("session_id")
+        credit_model_config = request.data.get("credit_model_config", {})
+        aggregate_config = request.data.get("aggregate_config", {})
+
+        if not session_id:
+            return Response(
+                {"error": "session_id is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if len(chunk_data) > 10000:
+            return Response(
+                {"error": "Chunk size exceeds 10K records limit"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Use Redis to track chunk upload progress
+        from django_drf_extensions.cache import get_redis_client
+
+        redis_client = get_redis_client()
+
+        chunk_key = f"chunk_upload:{session_id}"
+
+        # Store chunk data
+        redis_client.hset(chunk_key, f"chunk_{chunk_number}", json.dumps(chunk_data))
+
+        # Track progress
+        redis_client.hset(chunk_key, "total_chunks", total_chunks)
+        redis_client.hset(
+            chunk_key, "credit_model_config", json.dumps(credit_model_config)
+        )
+        redis_client.hset(chunk_key, "aggregate_config", json.dumps(aggregate_config))
+
+        # Check if all chunks received
+        received_chunks = redis_client.hkeys(chunk_key)
+        received_chunks = [k for k in received_chunks if k.startswith("chunk_")]
+
+        if len(received_chunks) == total_chunks:
+            # All chunks received, start processing
+            all_transactions = []
+
+            for i in range(1, total_chunks + 1):
+                chunk_json = redis_client.hget(chunk_key, f"chunk_{i}")
+                if chunk_json:
+                    all_transactions.extend(json.loads(chunk_json))
+
+            # Create job and start processing
+            job_id = JobStateManager.create_job(
+                job_type=JobType.PIPELINE,
+                description=f"Processing {len(all_transactions)} transactions from chunked upload",
+            )
+
+            # Start hybrid pipeline
+            from django_drf_extensions.enhanced_processing import (
+                process_transactions_pipeline_hybrid_task,
+            )
+
+            process_transactions_pipeline_hybrid_task.delay(
+                job_id=job_id,
+                transaction_data=all_transactions,
+                credit_model_config=credit_model_config,
+                aggregate_config=aggregate_config,
+            )
+
+            # Clean up chunk data
+            redis_client.delete(chunk_key)
+
+            return Response(
+                {
+                    "session_id": session_id,
+                    "job_id": job_id,
+                    "status_url": f"/api/{self.basename}/jobs/{job_id}/status/",
+                    "offers_url": f"/api/{self.basename}/jobs/{job_id}/offers/",
+                    "estimated_duration": "50-65 minutes",
+                    "total_transactions": len(all_transactions),
+                    "message": "All chunks received, processing started",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        else:
+            # More chunks expected
+            progress = (len(received_chunks) / total_chunks) * 100
+            next_chunk = len(received_chunks) + 1
+
+            return Response(
+                {
+                    "session_id": session_id,
+                    "chunk_received": chunk_number,
+                    "total_chunks": total_chunks,
+                    "progress": round(progress, 2),
+                    "next_chunk": next_chunk,
+                    "message": f"Chunk {chunk_number} received, waiting for more chunks",
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+    @extend_schema(
+        summary="Create bulk job (Salesforce-style)",
+        description="Create a bulk job without data. Returns job ID for subsequent data upload.",
+        request=serializers.DictField(
+            fields={
+                "object": serializers.CharField(
+                    help_text="Model name (e.g., 'FinancialTransaction')"
+                ),
+                "operation": serializers.CharField(
+                    help_text="Operation type: create, update, upsert, delete"
+                ),
+                "content_type": serializers.CharField(
+                    help_text="Data format: json, csv"
+                ),
+                "credit_model_config": serializers.DictField(
+                    help_text="Credit model configuration"
+                ),
+                "aggregate_config": serializers.DictField(
+                    help_text="Aggregation configuration"
+                ),
+            }
+        ),
+        responses={
+            201: serializers.DictField(
+                fields={
+                    "job_id": serializers.CharField(help_text="Unique job identifier"),
+                    "object": serializers.CharField(help_text="Model name"),
+                    "operation": serializers.CharField(help_text="Operation type"),
+                    "state": serializers.CharField(
+                        help_text="Job state: Open, InProgress, JobComplete, Failed"
+                    ),
+                    "created_date": serializers.DateTimeField(
+                        help_text="Job creation timestamp"
+                    ),
+                    "content_type": serializers.CharField(help_text="Data format"),
+                    "upload_url": serializers.CharField(help_text="URL to upload data"),
+                    "status_url": serializers.CharField(
+                        help_text="URL to check job status"
+                    ),
+                }
+            )
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="jobs")
+    def create_bulk_job(self, request):
+        """
+        Create a bulk job without data (Salesforce Bulk v2 style).
+        Returns job ID and upload URL for subsequent data upload.
+        """
+        object_name = request.data.get("object")
+        operation = request.data.get("operation", "create")
+        content_type = request.data.get("content_type", "json")
+        credit_model_config = request.data.get("credit_model_config", {})
+        aggregate_config = request.data.get("aggregate_config", {})
+
+        if not object_name:
+            return Response(
+                {"error": "object is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Create job in Open state
+        job_id = JobStateManager.create_job(
+            job_type=JobType.PIPELINE if operation == "pipeline" else JobType.BULK,
+            description=f"Bulk {operation} operation for {object_name}",
+            metadata={
+                "object": object_name,
+                "operation": operation,
+                "content_type": content_type,
+                "credit_model_config": credit_model_config,
+                "aggregate_config": aggregate_config,
+            },
+        )
+
+        return Response(
+            {
+                "job_id": job_id,
+                "object": object_name,
+                "operation": operation,
+                "state": "Open",
+                "created_date": JobStateManager.get_job(job_id).created_at,
+                "content_type": content_type,
+                "upload_url": f"/api/{self.basename}/jobs/{job_id}/upload/",
+                "status_url": f"/api/{self.basename}/jobs/{job_id}/status/",
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        summary="Upload data to bulk job",
+        description="Upload data to an existing bulk job. Supports streaming and chunked uploads.",
+        request=serializers.RawField(help_text="Data in specified content_type format"),
+        responses={
+            200: serializers.DictField(
+                fields={
+                    "job_id": serializers.CharField(help_text="Job identifier"),
+                    "bytes_uploaded": serializers.IntegerField(
+                        help_text="Bytes uploaded"
+                    ),
+                    "records_count": serializers.IntegerField(
+                        help_text="Records in upload"
+                    ),
+                    "state": serializers.CharField(help_text="Job state after upload"),
+                    "message": serializers.CharField(help_text="Upload status message"),
+                }
+            ),
+            400: serializers.DictField(
+                fields={
+                    "error": serializers.CharField(help_text="Upload error message"),
+                    "job_state": serializers.CharField(help_text="Current job state"),
+                }
+            ),
+        },
+    )
+    @action(detail=False, methods=["put"], url_path="jobs/(?P<job_id>[^/.]+)/upload")
+    def upload_job_data(self, request, job_id):
+        """
+        Upload data to an existing bulk job (Salesforce Bulk v2 style).
+        Supports streaming uploads and multiple batches.
+        """
+        job = JobStateManager.get_job(job_id)
+
+        if not job:
+            return Response(
+                {"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if job.state != JobState.OPEN:
+            return Response(
+                {
+                    "error": f"Job is in {job.state.value} state, cannot upload data",
+                    "job_state": job.state.value,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get job metadata
+        metadata = job.metadata or {}
+        content_type = metadata.get("content_type", "json")
+        object_name = metadata.get("object")
+        operation = metadata.get("operation", "create")
+
+        # Parse uploaded data based on content type
+        if content_type == "json":
+            try:
+                data = json.loads(request.body.decode("utf-8"))
+                if not isinstance(data, list):
+                    data = [data]
+                records_count = len(data)
+            except json.JSONDecodeError as e:
+                return Response(
+                    {"error": f"Invalid JSON: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        elif content_type == "csv":
+            # Parse CSV data
+            import csv
+            from io import StringIO
+
+            try:
+                csv_data = request.body.decode("utf-8")
+                reader = csv.DictReader(StringIO(csv_data))
+                data = list(reader)
+                records_count = len(data)
+            except Exception as e:
+                return Response(
+                    {"error": f"Invalid CSV: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            return Response(
+                {"error": f"Unsupported content type: {content_type}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Store uploaded data in Redis for processing
+        from django_drf_extensions.cache import get_redis_client
+
+        redis_client = get_redis_client()
+
+        upload_key = f"job_upload:{job_id}"
+        batch_number = redis_client.incr(f"{upload_key}:batch_count")
+
+        # Store batch data
+        redis_client.hset(
+            upload_key,
+            f"batch_{batch_number}",
+            json.dumps(
+                {
+                    "data": data,
+                    "records_count": records_count,
+                    "content_type": content_type,
+                    "uploaded_at": str(datetime.now()),
+                }
+            ),
+        )
+
+        # Update total records count
+        total_records = redis_client.hincrby(upload_key, "total_records", records_count)
+        total_bytes = redis_client.hincrby(upload_key, "total_bytes", len(request.body))
+
+        return Response(
+            {
+                "job_id": job_id,
+                "bytes_uploaded": len(request.body),
+                "records_count": records_count,
+                "total_records": total_records,
+                "batch_number": batch_number,
+                "state": job.state.value,
+                "message": f"Batch {batch_number} uploaded successfully",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        summary="Complete bulk job upload",
+        description="Signal that all data has been uploaded and processing should begin.",
+        responses={
+            200: serializers.DictField(
+                fields={
+                    "job_id": serializers.CharField(help_text="Job identifier"),
+                    "state": serializers.CharField(help_text="New job state"),
+                    "total_records": serializers.IntegerField(
+                        help_text="Total records uploaded"
+                    ),
+                    "total_bytes": serializers.IntegerField(
+                        help_text="Total bytes uploaded"
+                    ),
+                    "status_url": serializers.CharField(
+                        help_text="URL to monitor progress"
+                    ),
+                    "estimated_duration": serializers.CharField(
+                        help_text="Estimated processing time"
+                    ),
+                }
+            ),
+            400: serializers.DictField(
+                fields={
+                    "error": serializers.CharField(
+                        help_text="Completion error message"
+                    ),
+                }
+            ),
+        },
+    )
+    @action(
+        detail=False, methods=["patch"], url_path="jobs/(?P<job_id>[^/.]+)/complete"
+    )
+    def complete_job_upload(self, request, job_id):
+        """
+        Complete job upload and start processing (Salesforce Bulk v2 style).
+        """
+        job = JobStateManager.get_job(job_id)
+
+        if not job:
+            return Response(
+                {"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if job.state != JobState.OPEN:
+            return Response(
+                {"error": f"Job is in {job.state.value} state, cannot complete upload"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get uploaded data from Redis
+        from django_drf_extensions.cache import get_redis_client
+
+        redis_client = get_redis_client()
+
+        upload_key = f"job_upload:{job_id}"
+        total_records = redis_client.hget(upload_key, "total_records")
+        total_bytes = redis_client.hget(upload_key, "total_bytes")
+
+        if not total_records or int(total_records) == 0:
+            return Response(
+                {"error": "No data uploaded to job"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Collect all uploaded data
+        all_data = []
+        batch_keys = redis_client.hkeys(upload_key)
+        batch_keys = [k for k in batch_keys if k.startswith("batch_")]
+
+        for batch_key in batch_keys:
+            batch_data = redis_client.hget(upload_key, batch_key)
+            if batch_data:
+                batch_info = json.loads(batch_data)
+                all_data.extend(batch_info["data"])
+
+        # Get job metadata
+        metadata = job.metadata or {}
+        operation = metadata.get("operation", "create")
+        credit_model_config = metadata.get("credit_model_config", {})
+        aggregate_config = metadata.get("aggregate_config", {})
+
+        # Start processing based on operation type
+        if operation == "pipeline":
+            # Start hybrid pipeline
+            from django_drf_extensions.enhanced_processing import (
+                process_transactions_pipeline_hybrid_task,
+            )
+
+            process_transactions_pipeline_hybrid_task.delay(
+                job_id=job_id,
+                transaction_data=all_data,
+                credit_model_config=credit_model_config,
+                aggregate_config=aggregate_config,
+            )
+        else:
+            # Start standard bulk operation
+            from django_drf_extensions.enhanced_processing import enhanced_create_task
+
+            enhanced_create_task.delay(
+                job_id=job_id,
+                serializer_class_path=f"{self.queryset.model.__module__}.{self.queryset.model.__name__}Serializer",
+                data_list=all_data,
+                user_id=request.user.id if request.user.is_authenticated else None,
+            )
+
+        # Clean up upload data
+        redis_client.delete(upload_key)
+
+        # Update job state to InProgress
+        JobStateManager.update_job_state(
+            job_id, JobState.IN_PROGRESS, "Upload completed, processing started"
+        )
+
+        return Response(
+            {
+                "job_id": job_id,
+                "state": "InProgress",
+                "total_records": int(total_records),
+                "total_bytes": int(total_bytes),
+                "status_url": f"/api/{self.basename}/jobs/{job_id}/status/",
+                "estimated_duration": "50-65 minutes"
+                if operation == "pipeline"
+                else "10-15 minutes",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # Legacy alias for backwards compatibility during migration
