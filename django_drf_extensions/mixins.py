@@ -351,7 +351,7 @@ class OperationsMixin:
             )
 
         # Limit for sync processing
-        max_sync_items = 100
+        max_sync_items = 100000
         if len(ids_list) > max_sync_items:
             return Response(
                 {
