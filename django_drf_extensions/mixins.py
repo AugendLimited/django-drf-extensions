@@ -45,16 +45,6 @@ except ImportError:
         INT = "integer"
 
 
-# Import enhanced functionality for bulk operations
-from django_drf_extensions.enhanced_processing import (
-    enhanced_create_task,
-    enhanced_delete_task,
-    enhanced_upsert_task,
-    run_aggregates_task,
-)
-from django_drf_extensions.job_state import JobStateManager, JobType
-
-# Keep legacy imports for backward compatibility
 from django_drf_extensions.processing import (
     async_create_task,
     async_delete_task,
@@ -234,7 +224,7 @@ class OperationsMixin:
         to support: PATCH /api/model/?unique_fields=field1,field2
         """
         unique_fields_param = request.query_params.get("unique_fields")
-
+        
         if unique_fields_param and isinstance(request.data, list):
             return self._sync_upsert(request, unique_fields_param)
 
@@ -345,7 +335,7 @@ class OperationsMixin:
             )
 
         # Limit for sync processing
-        max_sync_items = 100
+        max_sync_items = 100000
         if len(ids_list) > max_sync_items:
             return Response(
                 {
@@ -373,7 +363,7 @@ class OperationsMixin:
         """Handle sync upsert operations for small datasets."""
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
-
+        
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
         if update_fields_param:
@@ -531,7 +521,7 @@ class OperationsMixin:
                 for field in unique_fields:
                     # Check if this field is a SlugRelatedField in the serializer
                     serializer_field = serializer_fields.get(field)
-
+                    
                     if serializer_field and isinstance(
                         serializer_field, serializers.SlugRelatedField
                     ):
@@ -744,7 +734,7 @@ class OperationsMixin:
                         fields_to_update = []
                         for field_name in update_fields:
                             field = model_class._meta.get_field(field_name)
-                            if hasattr(field, "related_model") and field.related_model:
+                            if hasattr(field, 'related_model') and field.related_model:
                                 # Foreign key field - use _id suffix for bulk_update
                                 fields_to_update.append(f"{field_name}_id")
                             else:
@@ -758,10 +748,7 @@ class OperationsMixin:
                                 if field.name not in unique_fields and hasattr(
                                     obj, field.name
                                 ):
-                                    if (
-                                        hasattr(field, "related_model")
-                                        and field.related_model
-                                    ):
+                                    if hasattr(field, 'related_model') and field.related_model:
                                         # Foreign key field - use _id suffix for bulk_update
                                         fields_to_update.append(f"{field.name}_id")
                                     else:
@@ -772,8 +759,8 @@ class OperationsMixin:
                         )  # Remove duplicates
 
                     # Check if we have foreign key fields to update
-                    has_foreign_keys = any("_id" in field for field in fields_to_update)
-
+                    has_foreign_keys = any('_id' in field for field in fields_to_update)
+                    
                     if has_foreign_keys:
                         # For objects with foreign key updates, use individual save() calls
                         for obj in update_objects:
@@ -924,8 +911,8 @@ class OperationsMixin:
                 "description": "Array of objects to create",
             }
         },
-        description="Create multiple instances asynchronously via background processing with job state tracking.",
-        summary="Enhanced async bulk create",
+        description="Create multiple instances asynchronously via background processing.",
+        summary="Async bulk create",
     )
     def bulk_create(self, request):
         """Async bulk create for large datasets."""
@@ -942,47 +929,20 @@ class OperationsMixin:
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Create job
+        # Start async task
         serializer_class = self.get_serializer_class()
         serializer_class_path = (
             f"{serializer_class.__module__}.{serializer_class.__name__}"
         )
-        model_class = self.get_queryset().model
-        model_class_path = f"{model_class.__module__}.{model_class.__name__}"
         user_id = request.user.id if request.user.is_authenticated else None
-
-        job = JobStateManager.create_job(
-            job_type=JobType.INSERT,
-            model_class_path=model_class_path,
-            serializer_class_path=serializer_class_path,
-            user_id=user_id,
-            total_items=len(data_list),
-        )
-
-        # Start async task
-        task = enhanced_create_task.delay(
-            job.job_id, serializer_class_path, data_list, user_id
-        )
+        task = async_create_task.delay(serializer_class_path, data_list, user_id)
 
         return Response(
             {
-                "message": f"Enhanced bulk create job started for {len(data_list)} items",
-                "job_id": job.job_id,
+                "message": f"Bulk create task started for {len(data_list)} items",
                 "task_id": task.id,
                 "total_items": len(data_list),
-                "status_url": f"/api/jobs/{job.job_id}/status/",
-                "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
-                "estimated_duration": f"{max(1, len(data_list) // 1000)}-{max(2, len(data_list) // 500)} minutes",
-                "next_steps": [
-                    "Poll status_url every 10 seconds for progress updates",
-                    "Check aggregates_url when status shows 'Job Complete'",
-                    "Review any errors in the status response"
-                ],
-                "tips": [
-                    "Large batches (>10k items) may take several minutes",
-                    "You can safely poll status_url frequently",
-                    "Aggregates are automatically calculated when job completes"
-                ]
+                "status_url": f"/api/operations/{task.id}/status/",
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1004,8 +964,8 @@ class OperationsMixin:
                 "description": "Array of objects to update or upsert",
             }
         },
-        description="Update multiple instances asynchronously with job state tracking. Supports both standard update (with id fields) and upsert mode (with unique_fields parameter).",
-        summary="Enhanced async bulk update/upsert",
+        description="Update multiple instances asynchronously. Supports both standard update (with id fields) and upsert mode (with unique_fields parameter).",
+        summary="Async bulk update/upsert",
     )
     def bulk_update(self, request):
         """Async bulk update/upsert for large datasets."""
@@ -1035,36 +995,20 @@ class OperationsMixin:
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Create job for bulk update
+        # Start async update task
         serializer_class = self.get_serializer_class()
         serializer_class_path = (
             f"{serializer_class.__module__}.{serializer_class.__name__}"
         )
-        model_class = self.get_queryset().model
-        model_class_path = f"{model_class.__module__}.{model_class.__name__}"
         user_id = request.user.id if request.user.is_authenticated else None
-
-        job = JobStateManager.create_job(
-            job_type=JobType.UPDATE,
-            model_class_path=model_class_path,
-            serializer_class_path=serializer_class_path,
-            user_id=user_id,
-            total_items=len(data_list),
-        )
-
-        # Start async task
-        task = enhanced_upsert_task.delay(
-            job.job_id, serializer_class_path, data_list, None, None, user_id
-        )
+        task = async_update_task.delay(serializer_class_path, data_list, user_id)
 
         return Response(
             {
-                "message": f"Enhanced bulk update job started for {len(data_list)} items",
-                "job_id": job.job_id,
+                "message": f"Bulk update task started for {len(data_list)} items",
                 "task_id": task.id,
                 "total_items": len(data_list),
-                "status_url": f"/api/jobs/{job.job_id}/status/",
-                "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "status_url": f"/api/operations/{task.id}/status/",
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1086,8 +1030,8 @@ class OperationsMixin:
                 "description": "Array of complete objects to replace or upsert",
             }
         },
-        description="Replace multiple instances asynchronously with job state tracking. Supports both standard replace (with id fields) and upsert mode (with unique_fields parameter).",
-        summary="Enhanced async bulk replace/upsert",
+        description="Replace multiple instances asynchronously. Supports both standard replace (with id fields) and upsert mode (with unique_fields parameter).",
+        summary="Async bulk replace/upsert",
     )
     def bulk_replace(self, request):
         """Async bulk replace/upsert for large datasets."""
@@ -1117,36 +1061,20 @@ class OperationsMixin:
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Create job for bulk replace
+        # Start async replace task
         serializer_class = self.get_serializer_class()
         serializer_class_path = (
             f"{serializer_class.__module__}.{serializer_class.__name__}"
         )
-        model_class = self.get_queryset().model
-        model_class_path = f"{model_class.__module__}.{model_class.__name__}"
         user_id = request.user.id if request.user.is_authenticated else None
-
-        job = JobStateManager.create_job(
-            job_type=JobType.REPLACE,
-            model_class_path=model_class_path,
-            serializer_class_path=serializer_class_path,
-            user_id=user_id,
-            total_items=len(data_list),
-        )
-
-        # Start async task
-        task = enhanced_upsert_task.delay(
-            job.job_id, serializer_class_path, data_list, None, None, user_id
-        )
+        task = async_replace_task.delay(serializer_class_path, data_list, user_id)
 
         return Response(
             {
-                "message": f"Enhanced bulk replace job started for {len(data_list)} items",
-                "job_id": job.job_id,
+                "message": f"Bulk replace task started for {len(data_list)} items",
                 "task_id": task.id,
                 "total_items": len(data_list),
-                "status_url": f"/api/jobs/{job.job_id}/status/",
-                "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "status_url": f"/api/operations/{task.id}/status/",
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1160,8 +1088,8 @@ class OperationsMixin:
                 "items": {"type": "integer"},
             }
         },
-        description="Delete multiple instances asynchronously via background processing with job state tracking.",
-        summary="Enhanced async bulk delete",
+        description="Delete multiple instances asynchronously via background processing.",
+        summary="Async bulk delete",
     )
     def bulk_delete(self, request):
         """Async bulk delete for large datasets using efficient bulk operations."""
@@ -1186,32 +1114,18 @@ class OperationsMixin:
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Create job for bulk delete
+        # Start async delete task with optimized bulk delete
         model_class = self.get_queryset().model
         model_class_path = f"{model_class.__module__}.{model_class.__name__}"
         user_id = request.user.id if request.user.is_authenticated else None
-
-        job = JobStateManager.create_job(
-            job_type=JobType.DELETE,
-            model_class_path=model_class_path,
-            serializer_class_path=None,  # Not needed for delete
-            user_id=user_id,
-            total_items=len(ids_list),
-        )
-
-        # Start async task
-        task = enhanced_delete_task.delay(
-            job.job_id, model_class_path, ids_list, user_id
-        )
+        task = async_delete_task.delay(model_class_path, ids_list, user_id)
 
         return Response(
             {
-                "message": f"Enhanced bulk delete job started for {len(ids_list)} items",
-                "job_id": job.job_id,
+                "message": f"Bulk delete task started for {len(ids_list)} items",
                 "task_id": task.id,
                 "total_items": len(ids_list),
-                "status_url": f"/api/jobs/{job.job_id}/status/",
-                "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "status_url": f"/api/operations/{task.id}/status/",
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -1236,135 +1150,27 @@ class OperationsMixin:
         if not update_fields:
             update_fields = self._infer_update_fields(data_list, unique_fields)
 
-        # Create job for bulk upsert
+        # Start async upsert task
         serializer_class = self.get_serializer_class()
         serializer_class_path = (
             f"{serializer_class.__module__}.{serializer_class.__name__}"
         )
-        model_class = self.get_queryset().model
-        model_class_path = f"{model_class.__module__}.{model_class.__name__}"
         user_id = request.user.id if request.user.is_authenticated else None
-
-        job = JobStateManager.create_job(
-            job_type=JobType.UPSERT,
-            model_class_path=model_class_path,
-            serializer_class_path=serializer_class_path,
-            user_id=user_id,
-            total_items=len(data_list),
-            unique_fields=unique_fields,
-            update_fields=update_fields,
-        )
-
-        # Start async task
-        task = enhanced_upsert_task.delay(
-            job.job_id,
-            serializer_class_path,
-            data_list,
-            unique_fields,
-            update_fields,
-            user_id,
+        task = async_upsert_task.delay(
+            serializer_class_path, data_list, unique_fields, update_fields, user_id
         )
 
         return Response(
             {
-                "message": f"Enhanced bulk upsert job started for {len(data_list)} items",
-                "job_id": job.job_id,
+                "message": f"Bulk upsert task started for {len(data_list)} items",
                 "task_id": task.id,
                 "total_items": len(data_list),
                 "unique_fields": unique_fields,
                 "update_fields": update_fields,
-                "status_url": f"/api/jobs/{job.job_id}/status/",
-                "aggregates_url": f"/api/jobs/{job.job_id}/aggregates/",
+                "status_url": f"/api/operations/{task.id}/status/",
             },
             status=status.HTTP_202_ACCEPTED,
         )
-
-    @action(detail=False, methods=["get"], url_path="jobs/(?P<job_id>[^/.]+)/status")
-    def get_job_status(self, request, job_id):
-        """Get the status of a bulk job."""
-        try:
-            job_summary = JobStateManager.get_job_summary(job_id)
-            return Response(job_summary, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response(
-                {"error": f"Failed to get job status: {str(e)}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-    @action(
-        detail=False, methods=["get"], url_path="jobs/(?P<job_id>[^/.]+)/aggregates"
-    )
-    def get_job_aggregates(self, request, job_id):
-        """Get aggregate results for a completed bulk job."""
-        try:
-            job = JobStateManager.get_job(job_id)
-            if not job:
-                return Response(
-                    {"error": "Job not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            if not job.aggregates_completed:
-                return Response(
-                    {"error": "Aggregates not yet completed for this job"},
-                    status=status.HTTP_202_ACCEPTED,
-                )
-
-            return Response(
-                {
-                    "job_id": job_id,
-                    "aggregate_results": job.aggregate_results,
-                },
-                status=status.HTTP_200_OK,
-            )
-        except Exception as e:
-            return Response(
-                {"error": f"Failed to get job aggregates: {str(e)}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-    @action(detail=False, methods=["post"], url_path="jobs/aggregates")
-    def run_job_aggregates(self, request):
-        """Run aggregates on a completed bulk job."""
-        job_id = request.data.get("job_id")
-        aggregate_config = request.data.get("aggregate_config", {})
-
-        if not job_id:
-            return Response(
-                {"error": "job_id is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            job = JobStateManager.get_job(job_id)
-            if not job:
-                return Response(
-                    {"error": "Job not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            if not job.aggregates_ready:
-                return Response(
-                    {"error": "Job is not ready for aggregates yet"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Start aggregate task
-            task = run_aggregates_task.delay(job_id, aggregate_config)
-
-            return Response(
-                {
-                    "message": "Aggregate task started",
-                    "job_id": job_id,
-                    "task_id": task.id,
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
-        except Exception as e:
-            return Response(
-                {"error": f"Failed to start aggregate task: {str(e)}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
 
 # Legacy alias for backwards compatibility during migration
