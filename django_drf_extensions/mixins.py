@@ -98,10 +98,13 @@ class OperationsMixin:
         - GET /api/model/                    # Standard list
         - GET /api/model/?ids=1,2,3          # Sync multi-get (small datasets)
         """
+        print(f"OperationsMixin.list() called with query_params: {request.query_params}", file=sys.stderr)
         ids_param = request.query_params.get("ids")
         if ids_param:
+            print(f"OperationsMixin.list() - Found ids parameter: {ids_param}", file=sys.stderr)
             return self._sync_multi_get(request, ids_param)
 
+        print(f"OperationsMixin.list() - No ids parameter, calling super().list()", file=sys.stderr)
         # Standard list behavior
         return super().list(request, *args, **kwargs)
 
@@ -112,10 +115,13 @@ class OperationsMixin:
         - POST /api/model/                                    # Standard single create
         - POST /api/model/?unique_fields=field1,field2       # Sync upsert (array data)
         """
+        print(f"OperationsMixin.create() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
+            print(f"OperationsMixin.create() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
             return self._sync_upsert(request, unique_fields_param)
 
+        print(f"OperationsMixin.create() - No unique_fields or not array data, calling super().create()", file=sys.stderr)
         # Standard single create behavior
         return super().create(request, *args, **kwargs)
 
@@ -126,10 +132,13 @@ class OperationsMixin:
         - PUT /api/model/{id}/                               # Standard single update
         - PUT /api/model/?unique_fields=field1,field2       # Sync upsert (array data)
         """
+        print(f"OperationsMixin.update() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
+            print(f"OperationsMixin.update() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
             return self._sync_upsert(request, unique_fields_param)
 
+        print(f"OperationsMixin.update() - No unique_fields or not array data, calling super().update()", file=sys.stderr)
         # Standard single update behavior
         return super().update(request, *args, **kwargs)
 
@@ -141,14 +150,18 @@ class OperationsMixin:
         - PATCH /api/model/?unique_fields=field1,field2     # Sync upsert (array data)
         """
         try:
+            print(f"OperationsMixin.partial_update() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
             unique_fields_param = request.query_params.get("unique_fields")
 
             if unique_fields_param and isinstance(request.data, list):
+                print(f"OperationsMixin.partial_update() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
                 return self._sync_upsert(request, unique_fields_param)
 
+            print(f"OperationsMixin.partial_update() - No unique_fields or not array data, calling super().partial_update()", file=sys.stderr)
             # Standard single partial update behavior
             return super().partial_update(request, *args, **kwargs)
         except Exception as e:
+            print(f"OperationsMixin.partial_update() - Exception occurred: {e}", file=sys.stderr)
             raise
 
     @extend_schema(
@@ -223,11 +236,14 @@ class OperationsMixin:
         DRF doesn't handle PATCH on list endpoints by default, so we add this method
         to support: PATCH /api/model/?unique_fields=field1,field2
         """
+        print(f"OperationsMixin.patch() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         
         if unique_fields_param and isinstance(request.data, list):
+            print(f"OperationsMixin.patch() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
             return self._sync_upsert(request, unique_fields_param)
 
+        print(f"OperationsMixin.patch() - No unique_fields or not array data, returning 400 error", file=sys.stderr)
         # If no unique_fields or not array data, this is invalid
         return Response(
             {
@@ -308,10 +324,13 @@ class OperationsMixin:
         DRF doesn't handle PUT on list endpoints by default, so we add this method
         to support: PUT /api/model/?unique_fields=field1,field2
         """
+        print(f"OperationsMixin.put() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
+            print(f"OperationsMixin.put() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
             return self._sync_upsert(request, unique_fields_param)
 
+        print(f"OperationsMixin.put() - No unique_fields or not array data, returning 400 error", file=sys.stderr)
         # If no unique_fields or not array data, this is invalid
         return Response(
             {
@@ -326,9 +345,12 @@ class OperationsMixin:
 
     def _sync_multi_get(self, request, ids_param):
         """Handle sync multi-get for small datasets."""
+        print(f"OperationsMixin._sync_multi_get() called with ids_param: {ids_param}", file=sys.stderr)
         try:
             ids_list = [int(id_str.strip()) for id_str in ids_param.split(",")]
+            print(f"OperationsMixin._sync_multi_get() - Parsed ids_list: {ids_list}", file=sys.stderr)
         except ValueError:
+            print(f"OperationsMixin._sync_multi_get() - Invalid ID format: {ids_param}", file=sys.stderr)
             return Response(
                 {"error": "Invalid ID format. Use comma-separated integers."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -337,6 +359,7 @@ class OperationsMixin:
         # Limit for sync processing
         max_sync_items = 100
         if len(ids_list) > max_sync_items:
+            print(f"OperationsMixin._sync_multi_get() - Too many items: {len(ids_list)} > {max_sync_items}", file=sys.stderr)
             return Response(
                 {
                     "error": f"Too many items for sync processing. Use /bulk/ endpoint for >{max_sync_items} items.",
@@ -348,9 +371,11 @@ class OperationsMixin:
             )
 
         # Process sync multi-get
+        print(f"OperationsMixin._sync_multi_get() - Processing {len(ids_list)} items", file=sys.stderr)
         queryset = self.get_queryset().filter(id__in=ids_list)
         serializer = self.get_serializer(queryset, many=True)
 
+        print(f"OperationsMixin._sync_multi_get() - Returning {len(serializer.data)} results", file=sys.stderr)
         return Response(
             {
                 "count": len(serializer.data),
@@ -361,8 +386,10 @@ class OperationsMixin:
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
+        print(f"OperationsMixin._sync_upsert() called with unique_fields_param: {unique_fields_param}", file=sys.stderr)
         # Parse parameters
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
+        print(f"OperationsMixin._sync_upsert() - Parsed unique_fields: {unique_fields}", file=sys.stderr)
         
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
@@ -370,22 +397,27 @@ class OperationsMixin:
             update_fields = [
                 f.strip() for f in update_fields_param.split(",") if f.strip()
             ]
+            print(f"OperationsMixin._sync_upsert() - Parsed update_fields: {update_fields}", file=sys.stderr)
 
         # Check if partial success is enabled
         partial_success = (
             request.query_params.get("partial_success", "false").lower() == "true"
         )
+        print(f"OperationsMixin._sync_upsert() - partial_success: {partial_success}", file=sys.stderr)
 
         data_list = request.data
         if not isinstance(data_list, list):
+            print(f"OperationsMixin._sync_upsert() - Expected array data, got: {type(data_list)}", file=sys.stderr)
             return Response(
                 {"error": "Expected array data for upsert operations."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        print(f"OperationsMixin._sync_upsert() - Processing {len(data_list)} items", file=sys.stderr)
         # Limit for sync processing
         max_sync_items = int(request.query_params.get("max_items", 50))
         if len(data_list) > max_sync_items:
+            print(f"OperationsMixin._sync_upsert() - Too many items: {len(data_list)} > {max_sync_items}", file=sys.stderr)
             return Response(
                 {
                     "error": f"Too many items for sync processing. Use /bulk/ endpoint for >{max_sync_items} items.",
@@ -397,6 +429,7 @@ class OperationsMixin:
             )
 
         if not unique_fields:
+            print(f"OperationsMixin._sync_upsert() - No unique_fields provided", file=sys.stderr)
             return Response(
                 {"error": "unique_fields parameter is required for upsert operations"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -405,14 +438,18 @@ class OperationsMixin:
         # Auto-infer update_fields if not provided
         if not update_fields:
             update_fields = self._infer_update_fields(data_list, unique_fields)
+            print(f"OperationsMixin._sync_upsert() - Auto-inferred update_fields: {update_fields}", file=sys.stderr)
 
         # Perform sync upsert
         try:
+            print(f"OperationsMixin._sync_upsert() - Starting sync upsert operation", file=sys.stderr)
             result = self._perform_sync_upsert(
                 data_list, unique_fields, update_fields, partial_success, request
             )
+            print(f"OperationsMixin._sync_upsert() - Sync upsert completed successfully", file=sys.stderr)
             return result
         except Exception as e:
+            print(f"OperationsMixin._sync_upsert() - Exception occurred: {e}", file=sys.stderr)
             return Response(
                 {"error": f"Upsert operation failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -430,8 +467,11 @@ class OperationsMixin:
         from django.db import transaction
         from rest_framework import status
 
+        print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}", file=sys.stderr)
+
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
+        print(f"OperationsMixin._perform_sync_upsert() - Model class: {model_class.__name__}", file=sys.stderr)
 
         created_ids = []
         updated_ids = []
@@ -451,23 +491,76 @@ class OperationsMixin:
                     if field.name not in unique_fields:
                         fields_to_update.append(field.name)
 
+            print(f"OperationsMixin._perform_sync_upsert() - Fields to update: {fields_to_update}", file=sys.stderr)
+
+            # Validate and deserialize data using serializer first
+            print(f"OperationsMixin._perform_sync_upsert() - Validating data with serializer", file=sys.stderr)
+            serializer = serializer_class(data=data_list, many=True)
+            if not serializer.is_valid():
+                print(f"OperationsMixin._perform_sync_upsert() - Serializer validation failed: {serializer.errors}", file=sys.stderr)
+                if not partial_success:
+                    return Response(
+                        {
+                            "error": "Data validation failed",
+                            "errors": serializer.errors,
+                            "total_items": len(data_list),
+                            "failed_items": len(data_list),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                else:
+                    # Add validation errors for partial success
+                    for index, item_errors in enumerate(serializer.errors):
+                        if item_errors:
+                            errors.append(
+                                {
+                                    "index": index,
+                                    "error": f"Validation failed: {item_errors}",
+                                    "data": data_list[index],
+                                }
+                            )
+                    # Continue with valid data only
+                    valid_data = [item for i, item in enumerate(data_list) if not serializer.errors[i]]
+                    if not valid_data:
+                        return Response(
+                            {
+                                "error": "All items failed validation",
+                                "errors": errors,
+                                "total_items": len(data_list),
+                                "failed_items": len(data_list),
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    # Re-validate the valid data
+                    serializer = serializer_class(data=valid_data, many=True)
+                    serializer.is_valid()  # Should be valid now
+                    data_list = valid_data
+
+            # Get validated data from serializer (this ensures proper field type conversion)
+            validated_data = serializer.validated_data
+            print(f"OperationsMixin._perform_sync_upsert() - Using validated data with {len(validated_data)} items", file=sys.stderr)
+
             # Single bulk_create call with update_conflicts for upsert - ABSOLUTELY NO LOOPS!
             # Use Django's bulk_create with update_conflicts - this is the most efficient approach
             # The list comprehension is unavoidable but it's the minimal overhead possible
+            print(f"OperationsMixin._perform_sync_upsert() - Starting bulk_create with update_conflicts", file=sys.stderr)
             created_instances = model_class.objects.bulk_create(
-                [model_class(**item_data) for item_data in data_list],  # Minimal overhead
+                [model_class(**item_data) for item_data in validated_data],  # Use validated data
                 batch_size=None,
                 ignore_conflicts=False,
                 update_conflicts=True,
                 update_fields=fields_to_update,
                 unique_fields=unique_fields,
             )
+            print(f"OperationsMixin._perform_sync_upsert() - bulk_create completed, created {len(created_instances)} instances", file=sys.stderr)
 
             # Single bulk serialization
             serializer = serializer_class(created_instances, many=True)
             success_data = serializer.data
+            print(f"OperationsMixin._perform_sync_upsert() - Serialized {len(success_data)} items", file=sys.stderr)
 
         except Exception as e:
+            print(f"OperationsMixin._perform_sync_upsert() - Exception during bulk_create: {e}", file=sys.stderr)
             if not partial_success:
                 return Response(
                     {
@@ -500,6 +593,7 @@ class OperationsMixin:
                 "updated_count": len(updated_ids),
             }
 
+            print(f"OperationsMixin._perform_sync_upsert() - Returning partial success response: {summary}", file=sys.stderr)
             return Response(
                 {"success": success_data, "errors": errors, "summary": summary},
                 status=status.HTTP_207_MULTI_STATUS,
@@ -508,14 +602,18 @@ class OperationsMixin:
             # Return standard DRF response for all-or-nothing
             if len(instances) == 1:
                 # Single object response (like PATCH /api/model/{id}/)
+                print(f"OperationsMixin._perform_sync_upsert() - Returning single object response", file=sys.stderr)
                 return Response(success_data[0], status=status.HTTP_200_OK)
             else:
                 # Multiple objects response (like PATCH with array)
+                print(f"OperationsMixin._perform_sync_upsert() - Returning multiple objects response with {len(success_data)} items", file=sys.stderr)
                 return Response(success_data, status=status.HTTP_200_OK)
 
     def _infer_update_fields(self, data_list, unique_fields):
         """Auto-infer update fields from data payload."""
+        print(f"OperationsMixin._infer_update_fields() called with {len(data_list)} items, unique_fields: {unique_fields}", file=sys.stderr)
         if not data_list:
+            print(f"OperationsMixin._infer_update_fields() - No data_list, returning empty list", file=sys.stderr)
             return []
 
         all_fields = set()
@@ -525,6 +623,7 @@ class OperationsMixin:
 
         update_fields = list(all_fields - set(unique_fields))
         update_fields.sort()
+        print(f"OperationsMixin._infer_update_fields() - Inferred update_fields: {update_fields}", file=sys.stderr)
         return update_fields
 
     # =============================================================================
