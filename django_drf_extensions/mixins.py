@@ -701,30 +701,80 @@ class OperationsMixin:
                 # Fast path: minimal coercion for performance (use carefully)
                 print(f"OperationsMixin._perform_sync_upsert() - FAST MODE enabled: performing minimal coercion", file=sys.stderr)
                 from datetime import datetime
+                from decimal import Decimal, InvalidOperation
+                # Build FK name->attname map and decimal field lookup
+                fk_name_to_attname = {}
+                decimal_field_names = set()
+                for f in model_class._meta.fields:
+                    try:
+                        from django.db.models import ForeignKey
+                        if isinstance(f, ForeignKey):
+                            fk_name_to_attname[f.name] = f.attname  # e.g. financial_account -> financial_account_id
+                    except Exception:
+                        pass
+                    try:
+                        from django.db.models import DecimalField
+                        if isinstance(f, DecimalField):
+                            decimal_field_names.add(f.name)
+                            decimal_field_names.add(getattr(f, 'attname', f.name))
+                    except Exception:
+                        pass
                 _tv0 = time.perf_counter()
                 coerced = []
+                fk_coerced_count = 0
+                dt_coerced_count = 0
+                dec_coerced_count = 0
                 for item in data_list:
                     mapped = {}
                     for key, value in item.items():
+                        # ForeignKey name provided with an integer -> map to attname '<field>_id'
+                        if key in fk_name_to_attname and isinstance(value, (int, str)):
+                            att_key = fk_name_to_attname[key]
+                            try:
+                                mapped[att_key] = int(value)
+                                fk_coerced_count += 1
+                                continue
+                            except (TypeError, ValueError):
+                                # fallback to raw assignment under original key
+                                pass
+                        # Already attname (e.g., '<field>_id') -> keep as-is
+                        if key.endswith('_id'):
+                            mapped[key] = value
+                            continue
                         # Coerce simple ISO8601 Z to aware UTC datetime
                         if isinstance(value, str) and key in ("datetime",):
                             # Handle '...Z' format
                             if value.endswith("Z"):
                                 try:
                                     mapped[key] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                                    dt_coerced_count += 1
+                                    continue
                                 except Exception:
                                     mapped[key] = value
+                                    continue
                             else:
                                 try:
                                     mapped[key] = datetime.fromisoformat(value)
+                                    dt_coerced_count += 1
+                                    continue
                                 except Exception:
                                     mapped[key] = value
+                                    continue
+                        # Optional: basic Decimal coercion to avoid float issues
+                        if key in decimal_field_names and isinstance(value, (int, float, str)):
+                            try:
+                                mapped[key] = Decimal(str(value))
+                                dec_coerced_count += 1
+                                continue
+                            except (InvalidOperation, ValueError, TypeError):
+                                mapped[key] = value
+                                continue
                         else:
                             mapped[key] = value
                     coerced.append(mapped)
                 validated_data = coerced
                 _tv = time.perf_counter() - _tv0
-                print(f"OperationsMixin._perform_sync_upsert() - FAST MODE coercion time: {_tv:.4f}s for {len(validated_data)} items", file=sys.stderr)
+                print(f"OperationsMixin._perform_sync_upsert() - FAST MODE coercion time: {_tv:.4f}s for {len(validated_data)} items (fk={fk_coerced_count}, dt={dt_coerced_count}, dec={dec_coerced_count})", file=sys.stderr)
 
             # Single bulk_create call with update_conflicts for upsert
             print(f"OperationsMixin._perform_sync_upsert() - Starting bulk_create with update_conflicts", file=sys.stderr)
