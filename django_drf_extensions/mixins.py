@@ -516,6 +516,10 @@ class OperationsMixin:
         fast_mode = request.query_params.get("fast_mode", "false").lower() == "true"
         print(f"OperationsMixin._sync_upsert() - fast_mode: {fast_mode}", file=sys.stderr)
 
+        # Optional: skip heavy DB-backed validators while keeping field coercion
+        skip_db_validators = request.query_params.get("skip_db_validators", "false").lower() == "true"
+        print(f"OperationsMixin._sync_upsert() - skip_db_validators: {skip_db_validators}", file=sys.stderr)
+
         data_list = request.data
         if not isinstance(data_list, list):
             print(f"OperationsMixin._sync_upsert() - Expected array data, got: {type(data_list)}", file=sys.stderr)
@@ -559,7 +563,7 @@ class OperationsMixin:
             print(f"OperationsMixin._sync_upsert() - Starting sync upsert operation", file=sys.stderr)
             _tc0 = time.perf_counter()
             result = self._perform_sync_upsert(
-                data_list, unique_fields, update_fields, partial_success, request, include_results, db_batch_size, fast_mode
+                data_list, unique_fields, update_fields, partial_success, request, include_results, db_batch_size, fast_mode, skip_db_validators
             )
             _tc = time.perf_counter() - _tc0
             print(f"OperationsMixin._sync_upsert() - _perform_sync_upsert duration: {_tc:.4f}s", file=sys.stderr)
@@ -584,12 +588,13 @@ class OperationsMixin:
         include_results=True,
         db_batch_size=None,
         fast_mode=False,
+        skip_db_validators=False,
     ):
         """Perform the actual sync upsert operation using bulk_create with update_conflicts."""
         from django.db import transaction
         from rest_framework import status
 
-        print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}, include_results: {include_results}, db_batch_size: {db_batch_size}, fast_mode: {fast_mode}", file=sys.stderr)
+        print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}, include_results: {include_results}, db_batch_size: {db_batch_size}, fast_mode: {fast_mode}, skip_db_validators: {skip_db_validators}", file=sys.stderr)
 
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
@@ -621,6 +626,7 @@ class OperationsMixin:
                         fields_to_update.append(field.name)
 
             print(f"OperationsMixin._perform_sync_upsert() - Fields to update: {fields_to_update}", file=sys.stderr)
+            print(f"OperationsMixin._perform_sync_upsert() - Field counts: unique={len(normalized_unique_fields)}, update={len(fields_to_update)}", file=sys.stderr)
 
             if not fast_mode:
                 # Validate and deserialize data using serializer first
@@ -628,6 +634,24 @@ class OperationsMixin:
                 is_partial = bool(getattr(request, "method", "").upper() == "PATCH")
                 _tv0 = time.perf_counter()
                 serializer = serializer_class(data=data_list, many=True, partial=is_partial)
+                # Optionally drop expensive validators (UniqueTogether, UniqueValidator, queryset lookups) for performance
+                if skip_db_validators:
+                    try:
+                        for field_name, field in serializer.fields.items():
+                            before = len(getattr(field, "validators", []))
+                            pruned = []
+                            for v in getattr(field, "validators", []):
+                                vn = v.__class__.__name__
+                                # Heuristic: drop validators that are known to hit DB or are heavy
+                                if vn in ("UniqueValidator",):
+                                    continue
+                                pruned.append(v)
+                            field.validators = pruned
+                            after = len(field.validators)
+                            if before != after:
+                                print(f"OperationsMixin._perform_sync_upsert() - Pruned validators for field '{field_name}': {before}->{after}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"OperationsMixin._perform_sync_upsert() - Validator pruning skipped due to error: {e}", file=sys.stderr)
                 if not serializer.is_valid():
                     print(f"OperationsMixin._perform_sync_upsert() - Serializer validation failed: {serializer.errors}", file=sys.stderr)
                     if not partial_success:
