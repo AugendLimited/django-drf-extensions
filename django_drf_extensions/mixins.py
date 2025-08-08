@@ -6,6 +6,7 @@ sync/async routing and adds /bulk/ endpoints for background processing.
 """
 
 import sys
+import time
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -98,15 +99,22 @@ class OperationsMixin:
         - GET /api/model/                    # Standard list
         - GET /api/model/?ids=1,2,3          # Sync multi-get (small datasets)
         """
+        _t0 = time.perf_counter()
         print(f"OperationsMixin.list() called with query_params: {request.query_params}", file=sys.stderr)
         ids_param = request.query_params.get("ids")
         if ids_param:
             print(f"OperationsMixin.list() - Found ids parameter: {ids_param}", file=sys.stderr)
-            return self._sync_multi_get(request, ids_param)
+            resp = self._sync_multi_get(request, ids_param)
+            _t1 = time.perf_counter() - _t0
+            print(f"OperationsMixin.list() - Total duration: {_t1:.4f}s", file=sys.stderr)
+            return resp
 
         print(f"OperationsMixin.list() - No ids parameter, calling super().list()", file=sys.stderr)
         # Standard list behavior
-        return super().list(request, *args, **kwargs)
+        resp = super().list(request, *args, **kwargs)
+        _t1 = time.perf_counter() - _t0
+        print(f"OperationsMixin.list() - Total duration: {_t1:.4f}s", file=sys.stderr)
+        return resp
 
     def create(self, request, *args, **kwargs):
         """
@@ -115,15 +123,22 @@ class OperationsMixin:
         - POST /api/model/                                    # Standard single create
         - POST /api/model/?unique_fields=field1,field2       # Sync upsert (array data)
         """
+        _t0 = time.perf_counter()
         print(f"OperationsMixin.create() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             print(f"OperationsMixin.create() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
-            return self._sync_upsert(request, unique_fields_param)
+            resp = self._sync_upsert(request, unique_fields_param)
+            _t1 = time.perf_counter() - _t0
+            print(f"OperationsMixin.create() - Total duration: {_t1:.4f}s", file=sys.stderr)
+            return resp
 
         print(f"OperationsMixin.create() - No unique_fields or not array data, calling super().create()", file=sys.stderr)
         # Standard single create behavior
-        return super().create(request, *args, **kwargs)
+        resp = super().create(request, *args, **kwargs)
+        _t1 = time.perf_counter() - _t0
+        print(f"OperationsMixin.create() - Total duration: {_t1:.4f}s", file=sys.stderr)
+        return resp
 
     def update(self, request, *args, **kwargs):
         """
@@ -132,15 +147,22 @@ class OperationsMixin:
         - PUT /api/model/{id}/                               # Standard single update
         - PUT /api/model/?unique_fields=field1,field2       # Sync upsert (array data)
         """
+        _t0 = time.perf_counter()
         print(f"OperationsMixin.update() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             print(f"OperationsMixin.update() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
-            return self._sync_upsert(request, unique_fields_param)
+            resp = self._sync_upsert(request, unique_fields_param)
+            _t1 = time.perf_counter() - _t0
+            print(f"OperationsMixin.update() - Total duration: {_t1:.4f}s", file=sys.stderr)
+            return resp
 
         print(f"OperationsMixin.update() - No unique_fields or not array data, calling super().update()", file=sys.stderr)
         # Standard single update behavior
-        return super().update(request, *args, **kwargs)
+        resp = super().update(request, *args, **kwargs)
+        _t1 = time.perf_counter() - _t0
+        print(f"OperationsMixin.update() - Total duration: {_t1:.4f}s", file=sys.stderr)
+        return resp
 
     def partial_update(self, request, *args, **kwargs):
         """
@@ -150,16 +172,23 @@ class OperationsMixin:
         - PATCH /api/model/?unique_fields=field1,field2     # Sync upsert (array data)
         """
         try:
+            _t0 = time.perf_counter()
             print(f"OperationsMixin.partial_update() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
             unique_fields_param = request.query_params.get("unique_fields")
 
             if unique_fields_param and isinstance(request.data, list):
                 print(f"OperationsMixin.partial_update() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
-                return self._sync_upsert(request, unique_fields_param)
+                resp = self._sync_upsert(request, unique_fields_param)
+                _t1 = time.perf_counter() - _t0
+                print(f"OperationsMixin.partial_update() - Total duration: {_t1:.4f}s", file=sys.stderr)
+                return resp
 
             print(f"OperationsMixin.partial_update() - No unique_fields or not array data, calling super().partial_update()", file=sys.stderr)
             # Standard single partial update behavior
-            return super().partial_update(request, *args, **kwargs)
+            resp = super().partial_update(request, *args, **kwargs)
+            _t1 = time.perf_counter() - _t0
+            print(f"OperationsMixin.partial_update() - Total duration: {_t1:.4f}s", file=sys.stderr)
+            return resp
         except Exception as e:
             print(f"OperationsMixin.partial_update() - Exception occurred: {e}", file=sys.stderr)
             raise
@@ -250,21 +279,28 @@ class OperationsMixin:
         DRF doesn't handle PATCH on list endpoints by default, so we add this method
         to support: PATCH /api/model/?unique_fields=field1,field2
         """
+        _t0 = time.perf_counter()
         print(f"OperationsMixin.patch() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         
         if unique_fields_param and isinstance(request.data, list):
             print(f"OperationsMixin.patch() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
-            return self._sync_upsert(request, unique_fields_param)
+            resp = self._sync_upsert(request, unique_fields_param)
+            _t1 = time.perf_counter() - _t0
+            print(f"OperationsMixin.patch() - Total duration: {_t1:.4f}s", file=sys.stderr)
+            return resp
 
         print(f"OperationsMixin.patch() - No unique_fields or not array data, returning 400 error", file=sys.stderr)
         # If no unique_fields or not array data, this is invalid
-        return Response(
+        resp = Response(
             {
                 "error": "PATCH on list endpoint requires 'unique_fields' parameter and array data"
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
+        _t1 = time.perf_counter() - _t0
+        print(f"OperationsMixin.patch() - Total duration: {_t1:.4f}s", file=sys.stderr)
+        return resp
 
     @extend_schema(
         parameters=[
@@ -352,20 +388,27 @@ class OperationsMixin:
         DRF doesn't handle PUT on list endpoints by default, so we add this method
         to support: PUT /api/model/?unique_fields=field1,field2
         """
+        _t0 = time.perf_counter()
         print(f"OperationsMixin.put() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         if unique_fields_param and isinstance(request.data, list):
             print(f"OperationsMixin.put() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
-            return self._sync_upsert(request, unique_fields_param)
+            resp = self._sync_upsert(request, unique_fields_param)
+            _t1 = time.perf_counter() - _t0
+            print(f"OperationsMixin.put() - Total duration: {_t1:.4f}s", file=sys.stderr)
+            return resp
 
         print(f"OperationsMixin.put() - No unique_fields or not array data, returning 400 error", file=sys.stderr)
         # If no unique_fields or not array data, this is invalid
-        return Response(
+        resp = Response(
             {
                 "error": "PUT on list endpoint requires 'unique_fields' parameter and array data"
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
+        _t1 = time.perf_counter() - _t0
+        print(f"OperationsMixin.put() - Total duration: {_t1:.4f}s", file=sys.stderr)
+        return resp
 
     # =============================================================================
     # Sync Operation Implementations
@@ -373,9 +416,13 @@ class OperationsMixin:
 
     def _sync_multi_get(self, request, ids_param):
         """Handle sync multi-get for small datasets."""
+        _t0 = time.perf_counter()
         print(f"OperationsMixin._sync_multi_get() called with ids_param: {ids_param}", file=sys.stderr)
         try:
+            _tp0 = time.perf_counter()
             ids_list = [int(id_str.strip()) for id_str in ids_param.split(",")]
+            _tp = time.perf_counter() - _tp0
+            print(f"OperationsMixin._sync_multi_get() - Parsed ids in {_tp:.4f}s; count={len(ids_list)}", file=sys.stderr)
             print(f"OperationsMixin._sync_multi_get() - Parsed ids_list: {ids_list}", file=sys.stderr)
         except ValueError:
             print(f"OperationsMixin._sync_multi_get() - Invalid ID format: {ids_param}", file=sys.stderr)
@@ -400,31 +447,47 @@ class OperationsMixin:
 
         # Process sync multi-get
         print(f"OperationsMixin._sync_multi_get() - Processing {len(ids_list)} items", file=sys.stderr)
+        _tq0 = time.perf_counter()
         queryset = self.get_queryset().filter(id__in=ids_list)
-        serializer = self.get_serializer(queryset, many=True)
+        _tq = time.perf_counter() - _tq0
+        print(f"OperationsMixin._sync_multi_get() - Query executed in {_tq:.4f}s", file=sys.stderr)
 
-        print(f"OperationsMixin._sync_multi_get() - Returning {len(serializer.data)} results", file=sys.stderr)
-        return Response(
+        _ts0 = time.perf_counter()
+        serializer = self.get_serializer(queryset, many=True)
+        _ts = time.perf_counter() - _ts0
+        print(f"OperationsMixin._sync_multi_get() - Serialization in {_ts:.4f}s (count={len(serializer.data)})", file=sys.stderr)
+
+        _t = time.perf_counter() - _t0
+        print(f"OperationsMixin._sync_multi_get() - Total duration: {_t:.4f}s", file=sys.stderr)
+        resp = Response(
             {
                 "count": len(serializer.data),
                 "results": serializer.data,
                 "is_sync": True,
             }
         )
+        return resp
 
     def _sync_upsert(self, request, unique_fields_param):
         """Handle sync upsert operations for small datasets."""
+        _t0 = time.perf_counter()
         print(f"OperationsMixin._sync_upsert() called with unique_fields_param: {unique_fields_param}", file=sys.stderr)
         # Parse parameters
+        _tp0 = time.perf_counter()
         unique_fields = [f.strip() for f in unique_fields_param.split(",") if f.strip()]
+        _tp = time.perf_counter() - _tp0
+        print(f"OperationsMixin._sync_upsert() - Parsed unique_fields in {_tp:.4f}s", file=sys.stderr)
         print(f"OperationsMixin._sync_upsert() - Parsed unique_fields: {unique_fields}", file=sys.stderr)
         
         update_fields_param = request.query_params.get("update_fields")
         update_fields = None
         if update_fields_param:
+            _tu0 = time.perf_counter()
             update_fields = [
                 f.strip() for f in update_fields_param.split(",") if f.strip()
             ]
+            _tu = time.perf_counter() - _tu0
+            print(f"OperationsMixin._sync_upsert() - Parsed update_fields in {_tu:.4f}s", file=sys.stderr)
             print(f"OperationsMixin._sync_upsert() - Parsed update_fields: {update_fields}", file=sys.stderr)
 
         # Check if partial success is enabled
@@ -448,6 +511,10 @@ class OperationsMixin:
             except ValueError:
                 db_batch_size = None
         print(f"OperationsMixin._sync_upsert() - db_batch_size: {db_batch_size}", file=sys.stderr)
+
+        # Optional fast mode to bypass DRF validation and do minimal coercion
+        fast_mode = request.query_params.get("fast_mode", "false").lower() == "true"
+        print(f"OperationsMixin._sync_upsert() - fast_mode: {fast_mode}", file=sys.stderr)
 
         data_list = request.data
         if not isinstance(data_list, list):
@@ -481,16 +548,24 @@ class OperationsMixin:
 
         # Auto-infer update_fields if not provided
         if not update_fields:
+            _ti0 = time.perf_counter()
             update_fields = self._infer_update_fields(data_list, unique_fields)
+            _ti = time.perf_counter() - _ti0
+            print(f"OperationsMixin._sync_upsert() - Inferred update_fields in {_ti:.4f}s", file=sys.stderr)
             print(f"OperationsMixin._sync_upsert() - Auto-inferred update_fields: {update_fields}", file=sys.stderr)
 
         # Perform sync upsert
         try:
             print(f"OperationsMixin._sync_upsert() - Starting sync upsert operation", file=sys.stderr)
+            _tc0 = time.perf_counter()
             result = self._perform_sync_upsert(
-                data_list, unique_fields, update_fields, partial_success, request, include_results, db_batch_size
+                data_list, unique_fields, update_fields, partial_success, request, include_results, db_batch_size, fast_mode
             )
+            _tc = time.perf_counter() - _tc0
+            print(f"OperationsMixin._sync_upsert() - _perform_sync_upsert duration: {_tc:.4f}s", file=sys.stderr)
             print(f"OperationsMixin._sync_upsert() - Sync upsert completed successfully", file=sys.stderr)
+            _t = time.perf_counter() - _t0
+            print(f"OperationsMixin._sync_upsert() - Total duration: {_t:.4f}s", file=sys.stderr)
             return result
         except Exception as e:
             print(f"OperationsMixin._sync_upsert() - Exception occurred: {e}", file=sys.stderr)
@@ -508,12 +583,13 @@ class OperationsMixin:
         request=None,
         include_results=True,
         db_batch_size=None,
+        fast_mode=False,
     ):
         """Perform the actual sync upsert operation using bulk_create with update_conflicts."""
         from django.db import transaction
         from rest_framework import status
 
-        print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}, include_results: {include_results}, db_batch_size: {db_batch_size}", file=sys.stderr)
+        print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}, include_results: {include_results}, db_batch_size: {db_batch_size}, fast_mode: {fast_mode}", file=sys.stderr)
 
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
@@ -546,56 +622,89 @@ class OperationsMixin:
 
             print(f"OperationsMixin._perform_sync_upsert() - Fields to update: {fields_to_update}", file=sys.stderr)
 
-            # Validate and deserialize data using serializer first
-            print(f"OperationsMixin._perform_sync_upsert() - Validating data with serializer", file=sys.stderr)
-            is_partial = bool(getattr(request, "method", "").upper() == "PATCH")
-            serializer = serializer_class(data=data_list, many=True, partial=is_partial)
-            if not serializer.is_valid():
-                print(f"OperationsMixin._perform_sync_upsert() - Serializer validation failed: {serializer.errors}", file=sys.stderr)
-                if not partial_success:
-                    return Response(
-                        {
-                            "error": "Data validation failed",
-                            "errors": serializer.errors,
-                            "total_items": len(data_list),
-                            "failed_items": len(data_list),
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                else:
-                    # Add validation errors for partial success
-                    for index, item_errors in enumerate(serializer.errors):
-                        if item_errors:
-                            errors.append(
-                                {
-                                    "index": index,
-                                    "error": f"Validation failed: {item_errors}",
-                                    "data": data_list[index],
-                                }
-                            )
-                    # Continue with valid data only
-                    valid_data = [item for i, item in enumerate(data_list) if not serializer.errors[i]]
-                    if not valid_data:
+            if not fast_mode:
+                # Validate and deserialize data using serializer first
+                print(f"OperationsMixin._perform_sync_upsert() - Validating data with serializer", file=sys.stderr)
+                is_partial = bool(getattr(request, "method", "").upper() == "PATCH")
+                _tv0 = time.perf_counter()
+                serializer = serializer_class(data=data_list, many=True, partial=is_partial)
+                if not serializer.is_valid():
+                    print(f"OperationsMixin._perform_sync_upsert() - Serializer validation failed: {serializer.errors}", file=sys.stderr)
+                    if not partial_success:
                         return Response(
                             {
-                                "error": "All items failed validation",
-                                "errors": errors,
+                                "error": "Data validation failed",
+                                "errors": serializer.errors,
                                 "total_items": len(data_list),
                                 "failed_items": len(data_list),
                             },
                             status=status.HTTP_400_BAD_REQUEST,
                         )
-                    # Re-validate the valid data
-                    serializer = serializer_class(data=valid_data, many=True, partial=is_partial)
-                    serializer.is_valid()  # Should be valid now
-                    data_list = valid_data
+                    else:
+                        # Add validation errors for partial success
+                        for index, item_errors in enumerate(serializer.errors):
+                            if item_errors:
+                                errors.append(
+                                    {
+                                        "index": index,
+                                        "error": f"Validation failed: {item_errors}",
+                                        "data": data_list[index],
+                                    }
+                                )
+                        # Continue with valid data only
+                        valid_data = [item for i, item in enumerate(data_list) if not serializer.errors[i]]
+                        if not valid_data:
+                            return Response(
+                                {
+                                    "error": "All items failed validation",
+                                    "errors": errors,
+                                    "total_items": len(data_list),
+                                    "failed_items": len(data_list),
+                                },
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                        # Re-validate the valid data
+                        serializer = serializer_class(data=valid_data, many=True, partial=is_partial)
+                        serializer.is_valid()  # Should be valid now
+                        data_list = valid_data
+                _tv = time.perf_counter() - _tv0
+                print(f"OperationsMixin._perform_sync_upsert() - Validation time: {_tv:.4f}s for {len(data_list)} items", file=sys.stderr)
 
-            # Get validated data from serializer (this ensures proper field type conversion)
-            validated_data = serializer.validated_data
-            print(f"OperationsMixin._perform_sync_upsert() - Using validated data with {len(validated_data)} items", file=sys.stderr)
+                # Get validated data from serializer (this ensures proper field type conversion)
+                validated_data = serializer.validated_data
+                print(f"OperationsMixin._perform_sync_upsert() - Using validated data with {len(validated_data)} items", file=sys.stderr)
+            else:
+                # Fast path: minimal coercion for performance (use carefully)
+                print(f"OperationsMixin._perform_sync_upsert() - FAST MODE enabled: performing minimal coercion", file=sys.stderr)
+                from datetime import datetime
+                _tv0 = time.perf_counter()
+                coerced = []
+                for item in data_list:
+                    mapped = {}
+                    for key, value in item.items():
+                        # Coerce simple ISO8601 Z to aware UTC datetime
+                        if isinstance(value, str) and key in ("datetime",):
+                            # Handle '...Z' format
+                            if value.endswith("Z"):
+                                try:
+                                    mapped[key] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                                except Exception:
+                                    mapped[key] = value
+                            else:
+                                try:
+                                    mapped[key] = datetime.fromisoformat(value)
+                                except Exception:
+                                    mapped[key] = value
+                        else:
+                            mapped[key] = value
+                    coerced.append(mapped)
+                validated_data = coerced
+                _tv = time.perf_counter() - _tv0
+                print(f"OperationsMixin._perform_sync_upsert() - FAST MODE coercion time: {_tv:.4f}s for {len(validated_data)} items", file=sys.stderr)
 
             # Single bulk_create call with update_conflicts for upsert
             print(f"OperationsMixin._perform_sync_upsert() - Starting bulk_create with update_conflicts", file=sys.stderr)
+            _tb0 = time.perf_counter()
             created_instances = model_class.objects.bulk_create(
                 [model_class(**item_data) for item_data in validated_data],  # Use validated data
                 batch_size=db_batch_size,
@@ -604,12 +713,17 @@ class OperationsMixin:
                 update_fields=fields_to_update,
                 unique_fields=normalized_unique_fields,
             )
+            _tb = time.perf_counter() - _tb0
+            print(f"OperationsMixin._perform_sync_upsert() - bulk_create time: {_tb:.4f}s for {len(validated_data)} items (batch_size={db_batch_size})", file=sys.stderr)
             print(f"OperationsMixin._perform_sync_upsert() - bulk_create completed, created {len(created_instances)} instances", file=sys.stderr)
 
             if include_results:
                 # Single bulk serialization
+                _ts0 = time.perf_counter()
                 serializer = serializer_class(created_instances, many=True)
                 success_data = serializer.data
+                _ts = time.perf_counter() - _ts0
+                print(f"OperationsMixin._perform_sync_upsert() - Response serialization time: {_ts:.4f}s", file=sys.stderr)
                 print(f"OperationsMixin._perform_sync_upsert() - Serialized {len(success_data)} items", file=sys.stderr)
             else:
                 success_data = []
