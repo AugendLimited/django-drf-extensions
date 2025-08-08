@@ -194,6 +194,20 @@ class OperationsMixin:
                 description="Allow partial success (default: false). Set to 'true' to allow some records to succeed while others fail.",
                 examples=[OpenApiExample("Partial Success", value="true")],
             ),
+            OpenApiParameter(
+                name="include_results",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="If 'false', skips serializing response results to improve performance (default: true)",
+                examples=[OpenApiExample("Include Results", value="false")],
+            ),
+            OpenApiParameter(
+                name="db_batch_size",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Optional database batch_size for bulk_create (default: ORM default)",
+                examples=[OpenApiExample("DB Batch Size", value=2000)],
+            ),
         ],
         request={
             "application/json": {
@@ -281,6 +295,20 @@ class OperationsMixin:
                 location=OpenApiParameter.QUERY,
                 description="Allow partial success (default: false). Set to 'true' to allow some records to succeed while others fail.",
                 examples=[OpenApiExample("Partial Success", value="true")],
+            ),
+            OpenApiParameter(
+                name="include_results",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="If 'false', skips serializing response results to improve performance (default: true)",
+                examples=[OpenApiExample("Include Results", value="false")],
+            ),
+            OpenApiParameter(
+                name="db_batch_size",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Optional database batch_size for bulk_create (default: ORM default)",
+                examples=[OpenApiExample("DB Batch Size", value=2000)],
             ),
         ],
         request={
@@ -405,6 +433,22 @@ class OperationsMixin:
         )
         print(f"OperationsMixin._sync_upsert() - partial_success: {partial_success}", file=sys.stderr)
 
+        # Check if response results should be included (default: true)
+        include_results = request.query_params.get("include_results", "true").lower() == "true"
+        print(f"OperationsMixin._sync_upsert() - include_results: {include_results}", file=sys.stderr)
+
+        # Optional DB batch size for bulk_create
+        db_batch_size_param = request.query_params.get("db_batch_size")
+        db_batch_size = None
+        if db_batch_size_param is not None:
+            try:
+                db_batch_size = int(db_batch_size_param)
+                if db_batch_size <= 0:
+                    db_batch_size = None
+            except ValueError:
+                db_batch_size = None
+        print(f"OperationsMixin._sync_upsert() - db_batch_size: {db_batch_size}", file=sys.stderr)
+
         data_list = request.data
         if not isinstance(data_list, list):
             print(f"OperationsMixin._sync_upsert() - Expected array data, got: {type(data_list)}", file=sys.stderr)
@@ -444,7 +488,7 @@ class OperationsMixin:
         try:
             print(f"OperationsMixin._sync_upsert() - Starting sync upsert operation", file=sys.stderr)
             result = self._perform_sync_upsert(
-                data_list, unique_fields, update_fields, partial_success, request
+                data_list, unique_fields, update_fields, partial_success, request, include_results, db_batch_size
             )
             print(f"OperationsMixin._sync_upsert() - Sync upsert completed successfully", file=sys.stderr)
             return result
@@ -462,12 +506,14 @@ class OperationsMixin:
         update_fields,
         partial_success=False,
         request=None,
+        include_results=True,
+        db_batch_size=None,
     ):
         """Perform the actual sync upsert operation using bulk_create with update_conflicts."""
         from django.db import transaction
         from rest_framework import status
 
-        print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}", file=sys.stderr)
+        print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}, include_results: {include_results}, db_batch_size: {db_batch_size}", file=sys.stderr)
 
         serializer_class = self.get_serializer_class()
         model_class = serializer_class.Meta.model
@@ -478,24 +524,32 @@ class OperationsMixin:
         errors = []
         instances = []
         success_data = []
+        validated_data = []
 
         # Use bulk_create with update_conflicts for upsert - no loops!
         try:
             # Determine which fields to update (exclude unique fields)
+            # Map attname (e.g., field_id) to model field names to ensure DB accepts field list
+            attname_to_name = {f.attname: f.name for f in model_class._meta.fields}
+            # Normalize unique_fields to model field names
+            normalized_unique_fields = [attname_to_name.get(f, f) for f in unique_fields]
+
             if update_fields:
-                fields_to_update = [field for field in update_fields if field not in unique_fields]
+                normalized_update_fields = [attname_to_name.get(f, f) for f in update_fields]
+                fields_to_update = [f for f in normalized_update_fields if f not in normalized_unique_fields]
             else:
                 # Auto-infer update fields (all fields except unique fields)
                 fields_to_update = []
                 for field in model_class._meta.fields:
-                    if field.name not in unique_fields:
+                    if field.name not in normalized_unique_fields:
                         fields_to_update.append(field.name)
 
             print(f"OperationsMixin._perform_sync_upsert() - Fields to update: {fields_to_update}", file=sys.stderr)
 
             # Validate and deserialize data using serializer first
             print(f"OperationsMixin._perform_sync_upsert() - Validating data with serializer", file=sys.stderr)
-            serializer = serializer_class(data=data_list, many=True)
+            is_partial = bool(getattr(request, "method", "").upper() == "PATCH")
+            serializer = serializer_class(data=data_list, many=True, partial=is_partial)
             if not serializer.is_valid():
                 print(f"OperationsMixin._perform_sync_upsert() - Serializer validation failed: {serializer.errors}", file=sys.stderr)
                 if not partial_success:
@@ -532,7 +586,7 @@ class OperationsMixin:
                             status=status.HTTP_400_BAD_REQUEST,
                         )
                     # Re-validate the valid data
-                    serializer = serializer_class(data=valid_data, many=True)
+                    serializer = serializer_class(data=valid_data, many=True, partial=is_partial)
                     serializer.is_valid()  # Should be valid now
                     data_list = valid_data
 
@@ -540,24 +594,26 @@ class OperationsMixin:
             validated_data = serializer.validated_data
             print(f"OperationsMixin._perform_sync_upsert() - Using validated data with {len(validated_data)} items", file=sys.stderr)
 
-            # Single bulk_create call with update_conflicts for upsert - ABSOLUTELY NO LOOPS!
-            # Use Django's bulk_create with update_conflicts - this is the most efficient approach
-            # The list comprehension is unavoidable but it's the minimal overhead possible
+            # Single bulk_create call with update_conflicts for upsert
             print(f"OperationsMixin._perform_sync_upsert() - Starting bulk_create with update_conflicts", file=sys.stderr)
             created_instances = model_class.objects.bulk_create(
                 [model_class(**item_data) for item_data in validated_data],  # Use validated data
-                batch_size=None,
+                batch_size=db_batch_size,
                 ignore_conflicts=False,
                 update_conflicts=True,
                 update_fields=fields_to_update,
-                unique_fields=unique_fields,
+                unique_fields=normalized_unique_fields,
             )
             print(f"OperationsMixin._perform_sync_upsert() - bulk_create completed, created {len(created_instances)} instances", file=sys.stderr)
 
-            # Single bulk serialization
-            serializer = serializer_class(created_instances, many=True)
-            success_data = serializer.data
-            print(f"OperationsMixin._perform_sync_upsert() - Serialized {len(success_data)} items", file=sys.stderr)
+            if include_results:
+                # Single bulk serialization
+                serializer = serializer_class(created_instances, many=True)
+                success_data = serializer.data
+                print(f"OperationsMixin._perform_sync_upsert() - Serialized {len(success_data)} items", file=sys.stderr)
+            else:
+                success_data = []
+                print(f"OperationsMixin._perform_sync_upsert() - Skipping serialization due to include_results=False", file=sys.stderr)
 
         except Exception as e:
             print(f"OperationsMixin._perform_sync_upsert() - Exception during bulk_create: {e}", file=sys.stderr)
@@ -587,7 +643,7 @@ class OperationsMixin:
             # Return partial success response with detailed information
             summary = {
                 "total_items": len(data_list),
-                "successful_items": len(success_data),
+                "successful_items": len(success_data) if include_results else len(validated_data),
                 "failed_items": len(errors),
                 "created_count": len(created_ids),
                 "updated_count": len(updated_ids),
@@ -595,19 +651,21 @@ class OperationsMixin:
 
             print(f"OperationsMixin._perform_sync_upsert() - Returning partial success response: {summary}", file=sys.stderr)
             return Response(
-                {"success": success_data, "errors": errors, "summary": summary},
+                {"success": success_data if include_results else None, "errors": errors, "summary": summary},
                 status=status.HTTP_207_MULTI_STATUS,
             )
         else:
             # Return standard DRF response for all-or-nothing
-            if len(instances) == 1:
-                # Single object response (like PATCH /api/model/{id}/)
-                print(f"OperationsMixin._perform_sync_upsert() - Returning single object response", file=sys.stderr)
-                return Response(success_data[0], status=status.HTTP_200_OK)
+            if include_results:
+                if len(instances) == 1:
+                    print(f"OperationsMixin._perform_sync_upsert() - Returning single object response", file=sys.stderr)
+                    return Response(success_data[0], status=status.HTTP_200_OK)
+                else:
+                    print(f"OperationsMixin._perform_sync_upsert() - Returning multiple objects response with {len(success_data)} items", file=sys.stderr)
+                    return Response(success_data, status=status.HTTP_200_OK)
             else:
-                # Multiple objects response (like PATCH with array)
-                print(f"OperationsMixin._perform_sync_upsert() - Returning multiple objects response with {len(success_data)} items", file=sys.stderr)
-                return Response(success_data, status=status.HTTP_200_OK)
+                print(f"OperationsMixin._perform_sync_upsert() - Returning 200 OK with no results (include_results=False)", file=sys.stderr)
+                return Response(status=status.HTTP_200_OK)
 
     def _infer_update_fields(self, data_list, unique_fields):
         """Auto-infer update fields from data payload."""
