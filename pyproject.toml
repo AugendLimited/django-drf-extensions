@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "django-drf-extensions"
-version = "0.1.65"
+version = "0.1.66"
 description = "Django REST Framework extensions for efficient async and synchronous operations with Celery and Redis"
 authors = ["Konrad Beck <konrad.beck@merchantcapital.co.za>"]
 readme = "README.md"

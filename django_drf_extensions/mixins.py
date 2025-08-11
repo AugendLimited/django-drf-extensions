@@ -306,6 +306,15 @@ class OperationsMixin:
         if unique_fields_param and isinstance(preparsed_list, list):
             print(f"OperationsMixin.patch() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(preparsed_list)} items", file=sys.stderr)
             resp = self._sync_upsert(request, unique_fields_param, preparsed_data=preparsed_list)
+            try:
+                # Expose request body parsing time to client for E2E analysis
+                resp["X-Op-Body-Parse-Sec"] = f"{_tp:.6f}"
+                if content_length is not None:
+                    resp["X-Op-Content-Length"] = str(content_length)
+                if raw_body is not None:
+                    resp["X-Op-Body-Bytes"] = str(len(raw_body))
+            except Exception:
+                pass
             _t1 = time.perf_counter() - _t0
             print(f"OperationsMixin.patch() - Total duration: {_t1:.4f}s", file=sys.stderr)
             return resp
@@ -617,6 +626,7 @@ class OperationsMixin:
         from django.db import transaction
         from rest_framework import status
 
+        _p0 = time.perf_counter()
         print(f"OperationsMixin._perform_sync_upsert() called with {len(data_list)} items, unique_fields: {unique_fields}, update_fields: {update_fields}, partial_success: {partial_success}, include_results: {include_results}, db_batch_size: {db_batch_size}, fast_mode: {fast_mode}, skip_db_validators: {skip_db_validators}", file=sys.stderr)
 
         serializer_class = self.get_serializer_class()
@@ -651,6 +661,10 @@ class OperationsMixin:
             print(f"OperationsMixin._perform_sync_upsert() - Fields to update: {fields_to_update}", file=sys.stderr)
             print(f"OperationsMixin._perform_sync_upsert() - Field counts: unique={len(normalized_unique_fields)}, update={len(fields_to_update)}", file=sys.stderr)
 
+            coerce_time = 0.0
+            instantiate_time = 0.0
+            bulk_time = 0.0
+            resp_serialize_time = 0.0
             if not fast_mode:
                 # Validate and deserialize data using serializer first
                 print(f"OperationsMixin._perform_sync_upsert() - Validating data with serializer", file=sys.stderr)
@@ -715,6 +729,7 @@ class OperationsMixin:
                         serializer.is_valid()  # Should be valid now
                         data_list = valid_data
                 _tv = time.perf_counter() - _tv0
+                coerce_time = _tv
                 print(f"OperationsMixin._perform_sync_upsert() - Validation time: {_tv:.4f}s for {len(data_list)} items", file=sys.stderr)
 
                 # Get validated data from serializer (this ensures proper field type conversion)
@@ -797,6 +812,7 @@ class OperationsMixin:
                     coerced.append(mapped)
                 validated_data = coerced
                 _tv = time.perf_counter() - _tv0
+                coerce_time = _tv
                 print(f"OperationsMixin._perform_sync_upsert() - FAST MODE coercion time: {_tv:.4f}s for {len(validated_data)} items (fk={fk_coerced_count}, dt={dt_coerced_count}, dec={dec_coerced_count})", file=sys.stderr)
 
             # Single bulk_create call with update_conflicts for upsert
@@ -804,6 +820,7 @@ class OperationsMixin:
             _ti0 = time.perf_counter()
             instances_to_create = [model_class(**item_data) for item_data in validated_data]
             _t_instantiate = time.perf_counter() - _ti0
+            instantiate_time = _t_instantiate
             print(f"OperationsMixin._perform_sync_upsert() - Instance construction time: {_t_instantiate:.4f}s for {len(instances_to_create)} items", file=sys.stderr)
             _tb0 = time.perf_counter()
             created_instances = model_class.objects.bulk_create(
@@ -815,6 +832,7 @@ class OperationsMixin:
                 unique_fields=normalized_unique_fields,
             )
             _tb = time.perf_counter() - _tb0
+            bulk_time = _tb
             print(f"OperationsMixin._perform_sync_upsert() - bulk_create time: {_tb:.4f}s for {len(validated_data)} items (batch_size={db_batch_size})", file=sys.stderr)
             print(f"OperationsMixin._perform_sync_upsert() - bulk_create completed, created {len(created_instances)} instances", file=sys.stderr)
 
@@ -824,6 +842,7 @@ class OperationsMixin:
                 serializer = serializer_class(created_instances, many=True)
                 success_data = serializer.data
                 _ts = time.perf_counter() - _ts0
+                resp_serialize_time = _ts
                 print(f"OperationsMixin._perform_sync_upsert() - Response serialization time: {_ts:.4f}s", file=sys.stderr)
                 print(f"OperationsMixin._perform_sync_upsert() - Serialized {len(success_data)} items", file=sys.stderr)
             else:
@@ -854,6 +873,19 @@ class OperationsMixin:
                     )
 
         # Handle response based on mode
+        total_time = time.perf_counter() - _p0
+        # Common headers for timing visibility
+        timing_headers = {
+            "X-Op-Coerce-Sec": f"{coerce_time:.6f}",
+            "X-Op-Instantiate-Sec": f"{instantiate_time:.6f}",
+            "X-Op-BulkCreate-Sec": f"{bulk_time:.6f}",
+            "X-Op-RespSerialize-Sec": f"{resp_serialize_time:.6f}",
+            "X-Op-Total-Sec": f"{total_time:.6f}",
+            "X-Op-Fast-Mode": str(bool(fast_mode)).lower(),
+            "X-Op-DB-Batch-Size": str(db_batch_size) if db_batch_size is not None else "none",
+            "X-Op-Items": str(len(data_list)),
+        }
+
         if partial_success:
             # Return partial success response with detailed information
             summary = {
@@ -865,22 +897,34 @@ class OperationsMixin:
             }
 
             print(f"OperationsMixin._perform_sync_upsert() - Returning partial success response: {summary}", file=sys.stderr)
-            return Response(
+            resp = Response(
                 {"success": success_data if include_results else None, "errors": errors, "summary": summary},
                 status=status.HTTP_207_MULTI_STATUS,
             )
+            try:
+                for k, v in timing_headers.items():
+                    resp[k] = v
+            except Exception:
+                pass
+            return resp
         else:
             # Return standard DRF response for all-or-nothing
             if include_results:
                 if len(instances) == 1:
                     print(f"OperationsMixin._perform_sync_upsert() - Returning single object response", file=sys.stderr)
-                    return Response(success_data[0], status=status.HTTP_200_OK)
+                    resp = Response(success_data[0], status=status.HTTP_200_OK)
                 else:
                     print(f"OperationsMixin._perform_sync_upsert() - Returning multiple objects response with {len(success_data)} items", file=sys.stderr)
-                    return Response(success_data, status=status.HTTP_200_OK)
+                    resp = Response(success_data, status=status.HTTP_200_OK)
             else:
                 print(f"OperationsMixin._perform_sync_upsert() - Returning 200 OK with no results (include_results=False)", file=sys.stderr)
-                return Response(status=status.HTTP_200_OK)
+                resp = Response(status=status.HTTP_200_OK)
+            try:
+                for k, v in timing_headers.items():
+                    resp[k] = v
+            except Exception:
+                pass
+            return resp
 
     def _infer_update_fields(self, data_list, unique_fields):
         """Auto-infer update fields from data payload."""
