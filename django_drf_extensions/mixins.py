@@ -283,9 +283,29 @@ class OperationsMixin:
         print(f"OperationsMixin.patch() called with query_params: {request.query_params}, data type: {type(request.data)}", file=sys.stderr)
         unique_fields_param = request.query_params.get("unique_fields")
         
-        if unique_fields_param and isinstance(request.data, list):
-            print(f"OperationsMixin.patch() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(request.data)} items", file=sys.stderr)
-            resp = self._sync_upsert(request, unique_fields_param)
+        # Measure body read time and JSON parse time
+        try:
+            _tb0 = time.perf_counter()
+            raw_body = request.body  # reading triggers body caching
+            _tb = time.perf_counter() - _tb0
+            body_len = len(raw_body) if raw_body else 0
+            content_length = request.META.get("CONTENT_LENGTH")
+            print(f"OperationsMixin.patch() - Body read time: {_tb:.4f}s, body_len={body_len}, CONTENT_LENGTH={content_length}", file=sys.stderr)
+        except Exception as e:
+            print(f"OperationsMixin.patch() - Body read error: {e}", file=sys.stderr)
+            raw_body = None
+
+        preparsed_list = None
+        _tp0 = time.perf_counter()
+        try:
+            preparsed_list = request.data
+        finally:
+            _tp = time.perf_counter() - _tp0
+            print(f"OperationsMixin.patch() - request.data parse time: {_tp:.4f}s, type={type(preparsed_list)}", file=sys.stderr)
+
+        if unique_fields_param and isinstance(preparsed_list, list):
+            print(f"OperationsMixin.patch() - Found unique_fields parameter: {unique_fields_param}, data is list with {len(preparsed_list)} items", file=sys.stderr)
+            resp = self._sync_upsert(request, unique_fields_param, preparsed_data=preparsed_list)
             _t1 = time.perf_counter() - _t0
             print(f"OperationsMixin.patch() - Total duration: {_t1:.4f}s", file=sys.stderr)
             return resp
@@ -468,7 +488,7 @@ class OperationsMixin:
         )
         return resp
 
-    def _sync_upsert(self, request, unique_fields_param):
+    def _sync_upsert(self, request, unique_fields_param, preparsed_data=None):
         """Handle sync upsert operations for small datasets."""
         _t0 = time.perf_counter()
         print(f"OperationsMixin._sync_upsert() called with unique_fields_param: {unique_fields_param}", file=sys.stderr)
@@ -520,7 +540,10 @@ class OperationsMixin:
         skip_db_validators = request.query_params.get("skip_db_validators", "false").lower() == "true"
         print(f"OperationsMixin._sync_upsert() - skip_db_validators: {skip_db_validators}", file=sys.stderr)
 
-        data_list = request.data
+        # Use pre-parsed data from caller if available
+        data_list = preparsed_data if preparsed_data is not None else request.data
+        if preparsed_data is not None:
+            print(f"OperationsMixin._sync_upsert() - Using preparsed_data: len={len(preparsed_data)}", file=sys.stderr)
         if not isinstance(data_list, list):
             print(f"OperationsMixin._sync_upsert() - Expected array data, got: {type(data_list)}", file=sys.stderr)
             return Response(
@@ -778,9 +801,13 @@ class OperationsMixin:
 
             # Single bulk_create call with update_conflicts for upsert
             print(f"OperationsMixin._perform_sync_upsert() - Starting bulk_create with update_conflicts", file=sys.stderr)
+            _ti0 = time.perf_counter()
+            instances_to_create = [model_class(**item_data) for item_data in validated_data]
+            _t_instantiate = time.perf_counter() - _ti0
+            print(f"OperationsMixin._perform_sync_upsert() - Instance construction time: {_t_instantiate:.4f}s for {len(instances_to_create)} items", file=sys.stderr)
             _tb0 = time.perf_counter()
             created_instances = model_class.objects.bulk_create(
-                [model_class(**item_data) for item_data in validated_data],  # Use validated data
+                instances_to_create,
                 batch_size=db_batch_size,
                 ignore_conflicts=False,
                 update_conflicts=True,
